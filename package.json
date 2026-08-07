@@ -1,0 +1,13 @@
+{
+  "name": "fight-castle-cloudflare",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Telegram Fight Castle bot on Cloudflare Workers + Durable Objects",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.30.0"
+  }
+}
