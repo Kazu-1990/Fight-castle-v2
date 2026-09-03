@@ -18,6 +18,15 @@ const SPECIAL_LABELS = {
   elf: "🧝 قدرت ویژه: ریشه‌های جنگل",
 };
 
+// file_id های آپلود‌شده روی تلگرام برای هر تصویر (رایگان و بدون محدودیت هاست جدا)
+const RACE_SPECIAL_IMAGE = {
+  vamp: "AgACAgQAAxkBAAMUapka2Y3lpRyToN8RcaLkQ5u7kQ4AAh8QaxsW0MlQ8Xfw3-apmI8BAAMCAAN3AAM9BA",
+  witcher: "AgACAgQAAxkBAAMQapkX7WWldwM7WHA0FS4Uw18ipIwAAhwQaxsW0MlQk6yUFwABX4-2AQADAgADdwADPQQ",
+  wolf: "AgACAgQAAxkBAAMSapka1RXWj-X76kVprAIAAbrleJsKAAIdEGsbFtDJUJ6AAAFXAnzI1AEAAwIAA3cAAz0E",
+  elf: "AgACAgQAAxkBAAMTapka18cYF9RNPPg7XTfXH9uqey4AAh4QaxsW0MlQcarp1nhPvgwBAAMCAAN3AAM9BA",
+};
+const BOTH_DEFEND_IMAGE = "AgACAgQAAxkBAAMVapka2mTjU23fbWwO0Y_rnKq5uvIAAiAQaxsW0MlQpwABRtYSaXYCAQADAgADdwADPQQ";
+
 const MOVE_LABELS = {
   "attack:head": "🗡 حمله به سر",
   "attack:body": "🗡 حمله به بدن",
@@ -188,6 +197,9 @@ function resolveRound(p1, p2) {
   let p1Heal = 0;
   let p2Heal = 0;
   const lines = [];
+  let bothDefended = false;
+  let p1SpecialSuccessRace = null;
+  let p2SpecialSuccessRace = null;
 
   const isDefend = (move, location = null) => move?.kind === "defend" && (location === null || move.location === location);
 
@@ -201,6 +213,7 @@ function resolveRound(p1, p2) {
           p1Heal += 20;
           lines.push("🧛 بازیکن ۱ جلو رفت و گردن حریف را گاز گرفت.");
           lines.push("🩸 بازیکن ۲: -20 HP | ❤️ بازیکن ۱: +20 HP");
+          p1SpecialSuccessRace = "vamp";
         }
       } else if (p1.race === "witcher") {
         if (isDefend(p2Move, "body")) {
@@ -210,12 +223,14 @@ function resolveRound(p1, p2) {
           p2.poison_damage = 10;
           lines.push("⚔️ بازیکن ۱ با شمشیر آغشته به پوشن بدن حریف را خراش داد.");
           lines.push("💥 بازیکن ۲: -25 HP | ☠️ پوشن در راند بعد 10 HP دیگر کم می‌کند.");
+          p1SpecialSuccessRace = "witcher";
         }
       } else if (p1.race === "wolf") {
         if (p2Move.kind === "defend") {
           p2Damage += 45;
           lines.push("🐺 بازیکن ۱ زیر نور ماه به گرگینه تبدیل شد و دست حریف را گاز گرفت.");
           lines.push("💥 بازیکن ۲: -45 HP");
+          p1SpecialSuccessRace = "wolf";
         } else {
           lines.push("🐺 قدرت ویژه گرگینه بازیکن ۱ فعال نشد؛ حریف دفاع نکرد.");
         }
@@ -225,8 +240,9 @@ function resolveRound(p1, p2) {
         } else {
           p2Damage += 25;
           p1Heal += 20;
-          lines.push(`🧝 ${mentionHtml(p1)} ریشه‌های جنگل را فرا خواند و ضربه‌ای به قفسه‌ی سینه‌ی حریف زد، در این فرصت خود را احیا کرد.`);
+          lines.push(`🧝 ${displayName(p1)} ریشه‌های جنگل را فرا خواند و ضربه‌ای به قفسه‌ی سینه‌ی حریف زد، در این فرصت خود را احیا کرد.`);
           lines.push("💥 بازیکن ۲: -25 HP | ❤️ بازیکن ۱: +20 HP");
+          p1SpecialSuccessRace = "elf";
         }
       }
     }
@@ -240,6 +256,7 @@ function resolveRound(p1, p2) {
           p2Heal += 20;
           lines.push("🧛 بازیکن ۲ جلو رفت و گردن حریف را گاز گرفت.");
           lines.push("🩸 بازیکن ۱: -20 HP | ❤️ بازیکن ۲: +20 HP");
+          p2SpecialSuccessRace = "vamp";
         }
       } else if (p2.race === "witcher") {
         if (isDefend(p1Move, "body")) {
@@ -249,12 +266,14 @@ function resolveRound(p1, p2) {
           p1.poison_damage = 10;
           lines.push("⚔️ بازیکن ۲ با شمشیر آغشته به پوشن بدن حریف را خراش داد.");
           lines.push("💥 بازیکن ۱: -25 HP | ☠️ پوشن در راند بعد 10 HP دیگر کم می‌کند.");
+          p2SpecialSuccessRace = "witcher";
         }
       } else if (p2.race === "wolf") {
         if (p1Move.kind === "defend") {
           p1Damage += 45;
           lines.push("🐺 بازیکن ۲ زیر نور ماه به گرگینه تبدیل شد و دست حریف را گاز گرفت.");
           lines.push("💥 بازیکن ۱: -45 HP");
+          p2SpecialSuccessRace = "wolf";
         } else {
           lines.push("🐺 قدرت ویژه گرگینه بازیکن ۲ فعال نشد؛ حریف دفاع نکرد.");
         }
@@ -264,8 +283,9 @@ function resolveRound(p1, p2) {
         } else {
           p1Damage += 25;
           p2Heal += 20;
-          lines.push(`🧝 ${mentionHtml(p2)} ریشه‌های جنگل را فرا خواند و ضربه‌ای به قفسه‌ی سینه‌ی حریف زد، در این فرصت خود را احیا کرد.`);
+          lines.push(`🧝 ${displayName(p2)} ریشه‌های جنگل را فرا خواند و ضربه‌ای به قفسه‌ی سینه‌ی حریف زد، در این فرصت خود را احیا کرد.`);
           lines.push("💥 بازیکن ۱: -25 HP | ❤️ بازیکن ۲: +20 HP");
+          p2SpecialSuccessRace = "elf";
         }
       }
     }
@@ -318,9 +338,10 @@ function resolveRound(p1, p2) {
     lines.push(`🛡 بازیکن ۱ از ${LOCATION_FA[p1Move.location]} دفاع کرد.`);
     lines.push(`🛡 بازیکن ۲ از ${LOCATION_FA[p2Move.location]} دفاع کرد.`);
     lines.push("🛡 هر دو بازیکن دفاع کردند؛ این راند بدون آسیب تمام شد.");
+    bothDefended = true;
   }
 
-  return { p1Damage, p2Damage, p1Heal, p2Heal, lines };
+  return { p1Damage, p2Damage, p1Heal, p2Heal, lines, bothDefended, p1SpecialSuccessRace, p2SpecialSuccessRace };
 }
 
 function winnerFromHp(p1Hp, p2Hp) {
@@ -368,6 +389,76 @@ async function sendText(env, chatId, text, replyMarkup) {
   const payload = { chat_id: chatId, text, parse_mode: "HTML", disable_web_page_preview: true };
   if (replyMarkup) payload.reply_markup = replyMarkup;
   return telegramApi(env, "sendMessage", payload);
+}
+
+async function deleteMessageApi(env, chatId, messageId) {
+  return telegramApi(env, "deleteMessage", { chat_id: chatId, message_id: messageId });
+}
+
+// شرط ۵گانه: کدوم عکس (اگر اصلاً عکسی) باید برای این راند نمایش داده بشه.
+// اگر هر دو بازیکن با موفقیت قدرت ویژه زدن، هیچ عکسی نشون داده نمی‌شه.
+function pickRoundImage(outcome) {
+  if (outcome.bothDefended) return BOTH_DEFEND_IMAGE;
+  const p1Race = outcome.p1SpecialSuccessRace;
+  const p2Race = outcome.p2SpecialSuccessRace;
+  if (p1Race && p2Race) return null;
+  if (p1Race) return RACE_SPECIAL_IMAGE[p1Race];
+  if (p2Race) return RACE_SPECIAL_IMAGE[p2Race];
+  return null;
+}
+
+// پیام اصلیِ در حال آپدیت مبارزه رو به‌روزرسانی می‌کند: اگر لازم باشد آن را به یک پیام
+// عکس‌دار تبدیل می‌کند (imageFileId موجود باشد)، یا در راند بعد دوباره آن را به پیام
+// متنیِ ساده برمی‌گرداند. چون تلگرام اجازه‌ی تبدیل مستقیم متن<->عکس با edit را نمی‌دهد،
+// در این حالت‌ها پیام قبلی حذف و پیام جدید فرستاده می‌شود (و message_id به‌روز می‌شود).
+// فراخوان بعد از این تابع باید fight را ذخیره کند (این تابع فقط fight را در حافظه تغییر می‌دهد).
+async function updateRoundMessage(env, fight, chatId, messageId, text, replyMarkup, imageFileId) {
+  const wasPhoto = fight.message_mode === "photo";
+  let alreadyDeleted = false;
+
+  if (imageFileId) {
+    if (wasPhoto) {
+      const payload = {
+        chat_id: chatId,
+        message_id: messageId,
+        media: { type: "photo", media: imageFileId, caption: text, parse_mode: "HTML" },
+      };
+      if (replyMarkup) payload.reply_markup = replyMarkup;
+      const edited = await telegramApi(env, "editMessageMedia", payload);
+      if (edited) {
+        fight.message_mode = "photo";
+        return;
+      }
+    } else {
+      await deleteMessageApi(env, chatId, messageId);
+      alreadyDeleted = true;
+      const payload = { chat_id: chatId, photo: imageFileId, caption: text, parse_mode: "HTML" };
+      if (replyMarkup) payload.reply_markup = replyMarkup;
+      const sent = await telegramApi(env, "sendPhoto", payload);
+      if (sent?.message_id) {
+        fight.message_mode = "photo";
+        fight.message_id = sent.message_id;
+        return;
+      }
+    }
+  }
+
+  // بدون عکس، یا عکس با خطا مواجه شد (مثلاً کپشن خیلی بلند بود) -> بازگشت به حالت متنی
+  if (wasPhoto && !alreadyDeleted) {
+    await deleteMessageApi(env, chatId, messageId);
+    alreadyDeleted = true;
+  }
+  if (alreadyDeleted) {
+    const payload = { chat_id: chatId, text, parse_mode: "HTML", disable_web_page_preview: true };
+    if (replyMarkup) payload.reply_markup = replyMarkup;
+    const sent = await telegramApi(env, "sendMessage", payload);
+    fight.message_mode = "text";
+    if (sent?.message_id) fight.message_id = sent.message_id;
+    return;
+  }
+
+  await editText(env, chatId, messageId, text, replyMarkup);
+  fight.message_mode = "text";
 }
 
 async function editText(env, chatId, messageId, text, replyMarkup) {
@@ -429,6 +520,7 @@ export class FightRoom extends DurableObject {
         phase: "p1_race",
         round_number: 1,
         message_id: null,
+        message_mode: "text",
         last_result: [],
       };
 
@@ -546,12 +638,13 @@ export class FightRoom extends DurableObject {
       fight.player1.hp = Math.min(MAX_HP, Math.max(0, fight.player1.hp - outcome.p1Damage + outcome.p1Heal));
       fight.player2.hp = Math.min(MAX_HP, Math.max(0, fight.player2.hp - outcome.p2Damage + outcome.p2Heal));
       fight.last_result = outcome.lines;
+      const roundImage = pickRoundImage(outcome);
       const winner = winnerFromHp(fight.player1.hp, fight.player2.hp);
 
       if (winner !== null) {
         fight.phase = "finished";
+        await updateRoundMessage(this.env, fight, chatId, messageId, renderFinished(fight, winner), null, roundImage);
         await this.saveFight(fight);
-        await editText(this.env, chatId, messageId, renderFinished(fight, winner));
         return;
       }
 
@@ -574,13 +667,13 @@ export class FightRoom extends DurableObject {
       const poisonWinner = winnerFromHp(fight.player1.hp, fight.player2.hp);
       if (poisonWinner !== null) {
         fight.phase = "finished";
+        await updateRoundMessage(this.env, fight, chatId, messageId, renderFinished(fight, poisonWinner), null, roundImage);
         await this.saveFight(fight);
-        await editText(this.env, chatId, messageId, renderFinished(fight, poisonWinner));
         return;
       }
 
+      await updateRoundMessage(this.env, fight, chatId, messageId, renderArena(fight), moveKeyboard(fight), roundImage);
       await this.saveFight(fight);
-      await editText(this.env, chatId, messageId, renderArena(fight), moveKeyboard(fight));
       return;
     }
 
@@ -608,12 +701,13 @@ export class FightRoom extends DurableObject {
       fight.player1.hp = Math.min(MAX_HP, Math.max(0, fight.player1.hp - outcome.p1Damage + outcome.p1Heal));
       fight.player2.hp = Math.min(MAX_HP, Math.max(0, fight.player2.hp - outcome.p2Damage + outcome.p2Heal));
       fight.last_result = outcome.lines;
+      const roundImage = pickRoundImage(outcome);
       const winner = winnerFromHp(fight.player1.hp, fight.player2.hp);
 
       if (winner !== null) {
         fight.phase = "finished";
+        await updateRoundMessage(this.env, fight, chatId, messageId, renderFinished(fight, winner), null, roundImage);
         await this.saveFight(fight);
-        await editText(this.env, chatId, messageId, renderFinished(fight, winner));
         return;
       }
 
@@ -636,13 +730,13 @@ export class FightRoom extends DurableObject {
       const poisonWinner = winnerFromHp(fight.player1.hp, fight.player2.hp);
       if (poisonWinner !== null) {
         fight.phase = "finished";
+        await updateRoundMessage(this.env, fight, chatId, messageId, renderFinished(fight, poisonWinner), null, roundImage);
         await this.saveFight(fight);
-        await editText(this.env, chatId, messageId, renderFinished(fight, poisonWinner));
         return;
       }
 
+      await updateRoundMessage(this.env, fight, chatId, messageId, renderArena(fight), moveKeyboard(fight), roundImage);
       await this.saveFight(fight);
-      await editText(this.env, chatId, messageId, renderArena(fight), moveKeyboard(fight));
       return;
     }
 
