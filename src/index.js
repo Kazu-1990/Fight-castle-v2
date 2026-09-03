@@ -476,6 +476,39 @@ export class FightRoom extends DurableObject {
   async saveFight(fight) { await this.ctx.storage.put("fight", fight); }
   async clearFight() { await this.ctx.storage.delete("fight"); }
 
+  async getLeaderboard() { return (await this.ctx.storage.get("leaderboard")) || {}; }
+  async saveLeaderboard(board) { await this.ctx.storage.put("leaderboard", board); }
+
+  // بعد از پایان هر مبارزه صدا زده می‌شود: رکورد رودررویِ همین دو بازیکن (صرف‌نظر از
+  // این‌که هرکدوم با نفرات دیگر چند چندند) را در این گروه به‌روز می‌کند و یک خط
+  // امتیاز به سبک "X ۳ - ۱ Y" برای نمایش در پیام پایان مبارزه برمی‌گرداند.
+  async recordResultAndFormat(fight, winner) {
+    const p1 = fight.player1;
+    const p2 = fight.player2;
+    const pairKey = [String(p1.user_id), String(p2.user_id)].sort().join(":");
+
+    const board = await this.getLeaderboard();
+    const entry = board[pairKey] || {};
+    for (const p of [p1, p2]) {
+      const uid = String(p.user_id);
+      if (!entry[uid]) entry[uid] = { name: displayName(p), wins: 0 };
+      entry[uid].name = displayName(p);
+    }
+    if (winner === 1 || winner === 2) {
+      const champ = winner === 1 ? p1 : p2;
+      entry[String(champ.user_id)].wins += 1;
+    }
+    board[pairKey] = entry;
+    await this.saveLeaderboard(board);
+
+    const p1Wins = entry[String(p1.user_id)].wins;
+    const p2Wins = entry[String(p2.user_id)].wins;
+    return (
+      "\n⚔️ <b>نتیجه‌ی تقابل این دو نفر</b>\n" +
+      `${escapeHtml(displayName(p1))} ${p1Wins} - ${p2Wins} ${escapeHtml(displayName(p2))}`
+    );
+  }
+
   async fetch(request) {
     if (request.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
     let update;
@@ -643,7 +676,8 @@ export class FightRoom extends DurableObject {
 
       if (winner !== null) {
         fight.phase = "finished";
-        await updateRoundMessage(this.env, fight, chatId, messageId, renderFinished(fight, winner), null, roundImage);
+        const scoreText = await this.recordResultAndFormat(fight, winner);
+        await updateRoundMessage(this.env, fight, chatId, messageId, renderFinished(fight, winner) + scoreText, null, roundImage);
         await this.saveFight(fight);
         return;
       }
@@ -667,7 +701,8 @@ export class FightRoom extends DurableObject {
       const poisonWinner = winnerFromHp(fight.player1.hp, fight.player2.hp);
       if (poisonWinner !== null) {
         fight.phase = "finished";
-        await updateRoundMessage(this.env, fight, chatId, messageId, renderFinished(fight, poisonWinner), null, roundImage);
+        const scoreText = await this.recordResultAndFormat(fight, poisonWinner);
+        await updateRoundMessage(this.env, fight, chatId, messageId, renderFinished(fight, poisonWinner) + scoreText, null, roundImage);
         await this.saveFight(fight);
         return;
       }
@@ -706,7 +741,8 @@ export class FightRoom extends DurableObject {
 
       if (winner !== null) {
         fight.phase = "finished";
-        await updateRoundMessage(this.env, fight, chatId, messageId, renderFinished(fight, winner), null, roundImage);
+        const scoreText = await this.recordResultAndFormat(fight, winner);
+        await updateRoundMessage(this.env, fight, chatId, messageId, renderFinished(fight, winner) + scoreText, null, roundImage);
         await this.saveFight(fight);
         return;
       }
@@ -730,7 +766,8 @@ export class FightRoom extends DurableObject {
       const poisonWinner = winnerFromHp(fight.player1.hp, fight.player2.hp);
       if (poisonWinner !== null) {
         fight.phase = "finished";
-        await updateRoundMessage(this.env, fight, chatId, messageId, renderFinished(fight, poisonWinner), null, roundImage);
+        const scoreText = await this.recordResultAndFormat(fight, poisonWinner);
+        await updateRoundMessage(this.env, fight, chatId, messageId, renderFinished(fight, poisonWinner) + scoreText, null, roundImage);
         await this.saveFight(fight);
         return;
       }
