@@ -957,11 +957,27 @@ export class FightRoom extends DurableObject {
   // چه قدرت ویژه): راند را حل می‌کند، اگر هر دو هم‌زمان به ۰ HP برسند وارد «دوئل مرگ»
   // می‌شود، در غیر این‌صورت تیک‌های تأخیریِ dot_queue (زهر الف / آتش ویچر) را اعمال
   // کرده و راند بعد را آماده می‌کند.
+  // بعد از این‌که حرکت هر دو بازیکنِ یک /fight ثبت شد صدا زده می‌شود (چه حرکت معمولی،
+  // چه قدرت ویژه): اول آسیب تأخیریِ راند قبل (زهر الف / آتش ویچر) را که قرار است در
+  // همین راند وارد شود اعمال می‌کند، سپس حرکت‌های همین راند را حل می‌کند. این ترتیب
+  // باعث می‌شود آسیب تأخیری دقیقاً «راند بعد» از ثبت قدرت ویژه اتفاق بیفتد، نه در
+  // همان راندی که قدرت ویژه زده شده. اگر هر دو هم‌زمان به ۰ HP برسند وارد «دوئل مرگ»
+  // می‌شود.
   async resolveFightTurn(fight, chatId, messageId) {
+    // آسیب تأخیریِ زمان‌بندی‌شده از قدرت ویژه‌ی راند(های) قبل، مخصوص همین راند
+    const dotLines = [];
+    for (const p of [fight.player1, fight.player2]) {
+      if (p.dot_queue?.length) {
+        const dmg = p.dot_queue.shift();
+        p.hp = Math.max(0, p.hp - dmg);
+        dotLines.push(`☠️ آسیب تأخیری روی ${displayName(p)} اثر کرد: -${dmg} HP.`);
+      }
+    }
+
     const outcome = resolveRound(fight.player1, fight.player2);
     fight.player1.hp = Math.min(MAX_HP, Math.max(0, fight.player1.hp - outcome.p1Damage + outcome.p1Heal));
     fight.player2.hp = Math.min(MAX_HP, Math.max(0, fight.player2.hp - outcome.p2Damage + outcome.p2Heal));
-    fight.last_result = outcome.lines;
+    fight.last_result = [...dotLines, ...outcome.lines];
     const roundImage = pickRoundImage(outcome);
 
     if (fight.player1.hp <= 0 && fight.player2.hp <= 0) {
@@ -981,31 +997,7 @@ export class FightRoom extends DurableObject {
     fight.player1.move = null;
     fight.player2.move = null;
     fight.round_number += 1;
-
-    const dotLines = [];
-    for (const p of [fight.player1, fight.player2]) {
-      if (p.dot_queue?.length) {
-        const dmg = p.dot_queue.shift();
-        p.hp = Math.max(0, p.hp - dmg);
-        dotLines.push(`☠️ آسیب تأخیری روی ${displayName(p)} اثر کرد: -${dmg} HP.`);
-      }
-    }
-    if (dotLines.length) fight.last_result.push(...dotLines);
     if (fight.round_number === 4) fight.last_result.push("⚡ قدرت‌های ویژه شارژ شدند! از راند ۴ هر بازیکن فقط یک بار می‌تواند از آن استفاده کند.");
-
-    if (fight.player1.hp <= 0 && fight.player2.hp <= 0) {
-      await this.enterDeathDuel(fight, chatId, messageId, roundImage);
-      return;
-    }
-
-    const dotWinner = winnerFromHp(fight.player1.hp, fight.player2.hp);
-    if (dotWinner !== null) {
-      fight.phase = "finished";
-      const scoreText = await this.recordResultAndFormat(fight, dotWinner);
-      await updateRoundMessage(this.env, fight, chatId, messageId, renderFinished(fight, dotWinner) + scoreText, null, roundImage);
-      await this.saveFight(fight);
-      return;
-    }
 
     await updateRoundMessage(this.env, fight, chatId, messageId, renderArena(fight), moveKeyboard(fight), roundImage);
     await this.saveFight(fight);
