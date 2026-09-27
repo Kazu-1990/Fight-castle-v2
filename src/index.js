@@ -13,9 +13,9 @@ const ATTACK_DAMAGE = { head: 30, body: 20, leg: 15 };
 const LOCATION_FA = { head: "سر", body: "بدن", leg: "پا" };
 const SPECIAL_LABELS = {
   vamp: "🧛 قدرت ویژه: گاز گرفتن گردن",
-  witcher: "⚔️ قدرت ویژه: زخم سمی",
-  wolf: "🐺 قدرت ویژه: گاز گرفتن دست",
-  elf: "🧝 قدرت ویژه: ریشه‌های جنگل",
+  witcher: "⚔️ قدرت ویژه: پوشن آتش‌زا",
+  wolf: "🐺 قدرت ویژه: چنگال‌های تیز",
+  elf: "🧝 قدرت ویژه: تیر زهرآلود",
 };
 
 // file_id های آپلود‌شده روی تلگرام برای هر تصویر (رایگان و بدون محدودیت هاست جدا)
@@ -65,6 +65,34 @@ const MOVE_LABELS = {
   "defend:leg": "🛡 دفاع از پا",
 };
 
+// دوئل مرگ: وقتی هر دو بازیکن در یک راند هم‌زمان به ۰ HP برسند، بازی وارد این حالت
+// می‌شود. منطقش دقیقا مثل سنگ‌کاغذقیچی است: سنگ=مشت، کاغذ=دفاع، قیچی=جادو.
+// مشت جادو را می‌برد، جادو دفاع را می‌برد، دفاع مشت را می‌برد. هرکس یک‌بار برنده شود، برنده‌ی نهایی مبارزه است.
+const DEATH_DUEL_LABELS = {
+  punch: "👊 مشت",
+  defend: "🛡 دفاع",
+  magic: "✨ جادو",
+};
+const DEATH_DUEL_BEATS = { punch: "magic", magic: "defend", defend: "punch" };
+
+function resolveDeathDuel(choice1, choice2) {
+  if (choice1 === choice2) return 0;
+  return DEATH_DUEL_BEATS[choice1] === choice2 ? 1 : 2;
+}
+
+function deathDuelKeyboard(fight) {
+  const t = fight.token;
+  const r = fight.dd_round;
+  return {
+    inline_keyboard: [
+      Object.entries(DEATH_DUEL_LABELS).map(([key, text]) => ({
+        text,
+        callback_data: `dd|${t}|${r}|${key}`,
+      })),
+    ],
+  };
+}
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -88,7 +116,7 @@ function makePlayer(user) {
     hp: MAX_HP,
     move: null,
     special_used: false,
-    poison_damage: 0,
+    dot_queue: [],
   };
 }
 
@@ -321,6 +349,36 @@ function renderFinished(fight, winner) {
   return base + "🏆 <b>WINNER</b>\n" + `${raceText(champ)} ${mentionHtml(champ)}\n\n` + `⚔️ ${fight.round_number} راند`;
 }
 
+function renderDeathDuel(fight) {
+  const p1 = fight.player1;
+  const p2 = fight.player2;
+  let text =
+    "💀 <b>DEATH DUEL</b>\n\n" +
+    "هر دو بازیکن هم‌زمان به ۰ HP رسیدند! برای تعیین برنده‌ی نهایی وارد دوئل مرگ شدید.\n\n" +
+    `${mentionHtml(p1)}   <b>VS</b>   ${mentionHtml(p2)}\n\n` +
+    "منطق مثل سنگ‌کاغذقیچی است:\n" +
+    "👊 مشت روی ✨ جادو می‌برد\n" +
+    "✨ جادو روی 🛡 دفاع می‌برد\n" +
+    "🛡 دفاع روی 👊 مشت می‌برد\n\n" +
+    "هرکس یک‌بار ببرد، برنده‌ی نهایی مبارزه است. در صورت تساوی، دوباره انتخاب می‌کنید.\n\n" +
+    `🎯 راند دوئل مرگ: ${fight.dd_round}\n` +
+    "انتخابت تا ثبت انتخاب حریف مخفی می‌ماند.";
+  return text;
+}
+
+function renderDeathDuelFinished(fight, winner) {
+  const p1 = fight.player1;
+  const p2 = fight.player2;
+  const champ = winner === 1 ? p1 : p2;
+  return (
+    "💀 <b>DEATH DUEL OVER</b>\n\n" +
+    `${mentionHtml(p1)}   <b>VS</b>   ${mentionHtml(p2)}\n\n` +
+    "🏆 <b>WINNER</b>\n" +
+    `${raceText(champ)} ${mentionHtml(champ)}\n\n` +
+    `⚔️ تصمیم نهایی در دوئل مرگ، راند ${fight.dd_round}`
+  );
+}
+
 function resolveRound(p1, p2) {
   const p1Move = p1.move;
   const p2Move = p2.move;
@@ -341,39 +399,39 @@ function resolveRound(p1, p2) {
         if (isDefend(p2Move, "head")) {
           lines.push("🛡 قدرت ویژه ومپایر بازیکن ۱ دفع شد؛ بازیکن ۲ از سر دفاع کرد.");
         } else {
-          p2Damage += 20;
+          p2Damage += 25;
           p1Heal += 20;
           lines.push("🧛 بازیکن ۱ جلو رفت و گردن حریف را گاز گرفت.");
-          lines.push("🩸 بازیکن ۲: -20 HP | ❤️ بازیکن ۱: +20 HP");
+          lines.push("🩸 بازیکن ۲: -25 HP | ❤️ بازیکن ۱: +20 HP");
           p1SpecialSuccessRace = "vamp";
         }
       } else if (p1.race === "witcher") {
-        if (isDefend(p2Move, "body")) {
-          lines.push("🛡 قدرت ویژه ویچر بازیکن ۱ دفع شد؛ بازیکن ۲ از بدن دفاع کرد.");
+        if (isDefend(p2Move, "leg")) {
+          lines.push("🛡 قدرت ویژه ویچر بازیکن ۱ دفع شد؛ بازیکن ۲ از پا دفاع کرد.");
         } else {
-          p2Damage += 25;
-          p2.poison_damage = 10;
-          lines.push("⚔️ بازیکن ۱ با شمشیر آغشته به پوشن بدن حریف را خراش داد.");
-          lines.push("💥 بازیکن ۲: -25 HP | ☠️ پوشن در راند بعد 10 HP دیگر کم می‌کند.");
+          p2Damage += 20;
+          p2.dot_queue.push(10, 10);
+          lines.push("⚔️ بازیکن ۱ پوشنی آتش‌زا زیر پای حریف انداخت.");
+          lines.push("💥 بازیکن ۲: -20 HP | 🔥 ۱۰ HP در راند بعد و ۱۰ HP دیگر در راند پس از آن.");
           p1SpecialSuccessRace = "witcher";
         }
       } else if (p1.race === "wolf") {
-        if (p2Move.kind === "defend") {
+        if (isDefend(p2Move, "body")) {
+          lines.push("🛡 قدرت ویژه گرگینه بازیکن ۱ دفع شد؛ بازیکن ۲ از بدن دفاع کرد.");
+        } else {
           p2Damage += 45;
-          lines.push("🐺 بازیکن ۱ زیر نور ماه به گرگینه تبدیل شد و دست حریف را گاز گرفت.");
+          lines.push("🐺 بازیکن ۱ زیر نور ماه به گرگینه تبدیل شد و چنگال‌های تیزش را به بدن حریف فرو کرد.");
           lines.push("💥 بازیکن ۲: -45 HP");
           p1SpecialSuccessRace = "wolf";
-        } else {
-          lines.push("🐺 قدرت ویژه گرگینه بازیکن ۱ فعال نشد؛ حریف دفاع نکرد.");
         }
       } else if (p1.race === "elf") {
         if (isDefend(p2Move, "body")) {
           lines.push("🛡 قدرت ویژه الف بازیکن ۱ دفع شد؛ بازیکن ۲ از بدن دفاع کرد.");
         } else {
-          p2Damage += 25;
-          p1Heal += 20;
-          lines.push(`🧝 ${displayName(p1)} ریشه‌های جنگل را فرا خواند و ضربه‌ای به قفسه‌ی سینه‌ی حریف زد، در این فرصت خود را احیا کرد.`);
-          lines.push("💥 بازیکن ۲: -25 HP | ❤️ بازیکن ۱: +20 HP");
+          p2Damage += 30;
+          p2.dot_queue.push(15);
+          lines.push(`🧝 ${displayName(p1)} تیری حاوی زهر به سمت حریف شلیک کرد.`);
+          lines.push("💥 بازیکن ۲: -30 HP | ☠️ زهر در راند بعد 15 HP دیگر کم می‌کند.");
           p1SpecialSuccessRace = "elf";
         }
       }
@@ -384,39 +442,39 @@ function resolveRound(p1, p2) {
         if (isDefend(p1Move, "head")) {
           lines.push("🛡 قدرت ویژه ومپایر بازیکن ۲ دفع شد؛ بازیکن ۱ از سر دفاع کرد.");
         } else {
-          p1Damage += 20;
+          p1Damage += 25;
           p2Heal += 20;
           lines.push("🧛 بازیکن ۲ جلو رفت و گردن حریف را گاز گرفت.");
-          lines.push("🩸 بازیکن ۱: -20 HP | ❤️ بازیکن ۲: +20 HP");
+          lines.push("🩸 بازیکن ۱: -25 HP | ❤️ بازیکن ۲: +20 HP");
           p2SpecialSuccessRace = "vamp";
         }
       } else if (p2.race === "witcher") {
-        if (isDefend(p1Move, "body")) {
-          lines.push("🛡 قدرت ویژه ویچر بازیکن ۲ دفع شد؛ بازیکن ۱ از بدن دفاع کرد.");
+        if (isDefend(p1Move, "leg")) {
+          lines.push("🛡 قدرت ویژه ویچر بازیکن ۲ دفع شد؛ بازیکن ۱ از پا دفاع کرد.");
         } else {
-          p1Damage += 25;
-          p1.poison_damage = 10;
-          lines.push("⚔️ بازیکن ۲ با شمشیر آغشته به پوشن بدن حریف را خراش داد.");
-          lines.push("💥 بازیکن ۱: -25 HP | ☠️ پوشن در راند بعد 10 HP دیگر کم می‌کند.");
+          p1Damage += 20;
+          p1.dot_queue.push(10, 10);
+          lines.push("⚔️ بازیکن ۲ پوشنی آتش‌زا زیر پای حریف انداخت.");
+          lines.push("💥 بازیکن ۱: -20 HP | 🔥 ۱۰ HP در راند بعد و ۱۰ HP دیگر در راند پس از آن.");
           p2SpecialSuccessRace = "witcher";
         }
       } else if (p2.race === "wolf") {
-        if (p1Move.kind === "defend") {
+        if (isDefend(p1Move, "body")) {
+          lines.push("🛡 قدرت ویژه گرگینه بازیکن ۲ دفع شد؛ بازیکن ۱ از بدن دفاع کرد.");
+        } else {
           p1Damage += 45;
-          lines.push("🐺 بازیکن ۲ زیر نور ماه به گرگینه تبدیل شد و دست حریف را گاز گرفت.");
+          lines.push("🐺 بازیکن ۲ زیر نور ماه به گرگینه تبدیل شد و چنگال‌های تیزش را به بدن حریف فرو کرد.");
           lines.push("💥 بازیکن ۱: -45 HP");
           p2SpecialSuccessRace = "wolf";
-        } else {
-          lines.push("🐺 قدرت ویژه گرگینه بازیکن ۲ فعال نشد؛ حریف دفاع نکرد.");
         }
       } else if (p2.race === "elf") {
         if (isDefend(p1Move, "body")) {
           lines.push("🛡 قدرت ویژه الف بازیکن ۲ دفع شد؛ بازیکن ۱ از بدن دفاع کرد.");
         } else {
-          p1Damage += 25;
-          p2Heal += 20;
-          lines.push(`🧝 ${displayName(p2)} ریشه‌های جنگل را فرا خواند و ضربه‌ای به قفسه‌ی سینه‌ی حریف زد، در این فرصت خود را احیا کرد.`);
-          lines.push("💥 بازیکن ۱: -25 HP | ❤️ بازیکن ۲: +20 HP");
+          p1Damage += 30;
+          p1.dot_queue.push(15);
+          lines.push(`🧝 ${displayName(p2)} تیری حاوی زهر به سمت حریف شلیک کرد.`);
+          lines.push("💥 بازیکن ۱: -30 HP | ☠️ زهر در راند بعد 15 HP دیگر کم می‌کند.");
           p2SpecialSuccessRace = "elf";
         }
       }
@@ -445,10 +503,9 @@ function resolveRound(p1, p2) {
   } else if (p1Move.kind === "attack" && p2Move.kind === "defend") {
     const damage = ATTACK_DAMAGE[p1Move.location];
     if (p1Move.location === p2Move.location) {
-      const penalty = damage - 5;
-      p1Damage += penalty;
+      p1Damage += damage;
       lines.push(`🛡 بازیکن ۲ حمله به ${LOCATION_FA[p1Move.location]} را درست دفاع کرد.`);
-      lines.push(`↩️ حمله دفع شد؛ بازیکن ۱: -${penalty} HP`);
+      lines.push(`↩️ حمله برگشت خورد؛ بازیکن ۱: -${damage} HP | بازیکن ۲ آسیبی ندید.`);
     } else {
       p2Damage += damage;
       lines.push(`💥 بازیکن ۱ به ${LOCATION_FA[p1Move.location]} حمله کرد؛ دفاع بازیکن ۲ از ${LOCATION_FA[p2Move.location]} اشتباه بود.`);
@@ -457,10 +514,9 @@ function resolveRound(p1, p2) {
   } else if (p1Move.kind === "defend" && p2Move.kind === "attack") {
     const damage = ATTACK_DAMAGE[p2Move.location];
     if (p2Move.location === p1Move.location) {
-      const penalty = damage - 5;
-      p2Damage += penalty;
+      p2Damage += damage;
       lines.push(`🛡 بازیکن ۱ حمله به ${LOCATION_FA[p2Move.location]} را درست دفاع کرد.`);
-      lines.push(`↩️ حمله دفع شد؛ بازیکن ۲: -${penalty} HP`);
+      lines.push(`↩️ حمله برگشت خورد؛ بازیکن ۲: -${damage} HP | بازیکن ۱ آسیبی ندید.`);
     } else {
       p1Damage += damage;
       lines.push(`💥 بازیکن ۲ به ${LOCATION_FA[p2Move.location]} حمله کرد؛ دفاع بازیکن ۱ از ${LOCATION_FA[p1Move.location]} اشتباه بود.`);
@@ -897,6 +953,76 @@ export class FightRoom extends DurableObject {
     await this.saveFight(fight);
   }
 
+  // بعد از این‌که حرکت هر دو بازیکنِ یک /fight ثبت شد صدا زده می‌شود (چه حرکت معمولی،
+  // چه قدرت ویژه): راند را حل می‌کند، اگر هر دو هم‌زمان به ۰ HP برسند وارد «دوئل مرگ»
+  // می‌شود، در غیر این‌صورت تیک‌های تأخیریِ dot_queue (زهر الف / آتش ویچر) را اعمال
+  // کرده و راند بعد را آماده می‌کند.
+  async resolveFightTurn(fight, chatId, messageId) {
+    const outcome = resolveRound(fight.player1, fight.player2);
+    fight.player1.hp = Math.min(MAX_HP, Math.max(0, fight.player1.hp - outcome.p1Damage + outcome.p1Heal));
+    fight.player2.hp = Math.min(MAX_HP, Math.max(0, fight.player2.hp - outcome.p2Damage + outcome.p2Heal));
+    fight.last_result = outcome.lines;
+    const roundImage = pickRoundImage(outcome);
+
+    if (fight.player1.hp <= 0 && fight.player2.hp <= 0) {
+      await this.enterDeathDuel(fight, chatId, messageId, roundImage);
+      return;
+    }
+
+    const winner = winnerFromHp(fight.player1.hp, fight.player2.hp);
+    if (winner !== null) {
+      fight.phase = "finished";
+      const scoreText = await this.recordResultAndFormat(fight, winner);
+      await updateRoundMessage(this.env, fight, chatId, messageId, renderFinished(fight, winner) + scoreText, null, roundImage);
+      await this.saveFight(fight);
+      return;
+    }
+
+    fight.player1.move = null;
+    fight.player2.move = null;
+    fight.round_number += 1;
+
+    const dotLines = [];
+    for (const p of [fight.player1, fight.player2]) {
+      if (p.dot_queue?.length) {
+        const dmg = p.dot_queue.shift();
+        p.hp = Math.max(0, p.hp - dmg);
+        dotLines.push(`☠️ آسیب تأخیری روی ${displayName(p)} اثر کرد: -${dmg} HP.`);
+      }
+    }
+    if (dotLines.length) fight.last_result.push(...dotLines);
+    if (fight.round_number === 4) fight.last_result.push("⚡ قدرت‌های ویژه شارژ شدند! از راند ۴ هر بازیکن فقط یک بار می‌تواند از آن استفاده کند.");
+
+    if (fight.player1.hp <= 0 && fight.player2.hp <= 0) {
+      await this.enterDeathDuel(fight, chatId, messageId, roundImage);
+      return;
+    }
+
+    const dotWinner = winnerFromHp(fight.player1.hp, fight.player2.hp);
+    if (dotWinner !== null) {
+      fight.phase = "finished";
+      const scoreText = await this.recordResultAndFormat(fight, dotWinner);
+      await updateRoundMessage(this.env, fight, chatId, messageId, renderFinished(fight, dotWinner) + scoreText, null, roundImage);
+      await this.saveFight(fight);
+      return;
+    }
+
+    await updateRoundMessage(this.env, fight, chatId, messageId, renderArena(fight), moveKeyboard(fight), roundImage);
+    await this.saveFight(fight);
+  }
+
+  // بازی را وارد حالت «دوئل مرگ» می‌کند: دکمه‌ها به سنگ‌کاغذقیچی تغییر می‌کنند و هر دو
+  // بازیکن باید انتخاب خودشان را ثبت کنند تا برنده‌ی نهایی مشخص شود.
+  async enterDeathDuel(fight, chatId, messageId, roundImage) {
+    fight.phase = "death_duel";
+    fight.dd_round = 1;
+    fight.player1.move = null;
+    fight.player2.move = null;
+    fight.last_result.push("💀 هر دو بازیکن هم‌زمان به ۰ HP رسیدند! وارد دوئل مرگ شدید.");
+    await updateRoundMessage(this.env, fight, chatId, messageId, renderDeathDuel(fight), deathDuelKeyboard(fight), roundImage);
+    await this.saveFight(fight);
+  }
+
   async fetch(request) {
     if (request.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
     let update;
@@ -1122,48 +1248,7 @@ export class FightRoom extends DurableObject {
         return;
       }
 
-      const outcome = resolveRound(fight.player1, fight.player2);
-      fight.player1.hp = Math.min(MAX_HP, Math.max(0, fight.player1.hp - outcome.p1Damage + outcome.p1Heal));
-      fight.player2.hp = Math.min(MAX_HP, Math.max(0, fight.player2.hp - outcome.p2Damage + outcome.p2Heal));
-      fight.last_result = outcome.lines;
-      const roundImage = pickRoundImage(outcome);
-      const winner = winnerFromHp(fight.player1.hp, fight.player2.hp);
-
-      if (winner !== null) {
-        fight.phase = "finished";
-        const scoreText = await this.recordResultAndFormat(fight, winner);
-        await updateRoundMessage(this.env, fight, chatId, messageId, renderFinished(fight, winner) + scoreText, null, roundImage);
-        await this.saveFight(fight);
-        return;
-      }
-
-      fight.player1.move = null;
-      fight.player2.move = null;
-      fight.round_number += 1;
-
-      const poisonLines = [];
-      for (const playerToProcess of [fight.player1, fight.player2]) {
-        if (playerToProcess.poison_damage > 0) {
-          const poison = playerToProcess.poison_damage;
-          playerToProcess.hp = Math.max(0, playerToProcess.hp - poison);
-          playerToProcess.poison_damage = 0;
-          poisonLines.push(`☠️ پوشن روی ${displayName(playerToProcess)} اثر کرد: -${poison} HP.`);
-        }
-      }
-      if (poisonLines.length) fight.last_result.push(...poisonLines);
-      if (fight.round_number === 4) fight.last_result.push("⚡ قدرت‌های ویژه شارژ شدند! از راند ۴ هر بازیکن فقط یک بار می‌تواند از آن استفاده کند.");
-
-      const poisonWinner = winnerFromHp(fight.player1.hp, fight.player2.hp);
-      if (poisonWinner !== null) {
-        fight.phase = "finished";
-        const scoreText = await this.recordResultAndFormat(fight, poisonWinner);
-        await updateRoundMessage(this.env, fight, chatId, messageId, renderFinished(fight, poisonWinner) + scoreText, null, roundImage);
-        await this.saveFight(fight);
-        return;
-      }
-
-      await updateRoundMessage(this.env, fight, chatId, messageId, renderArena(fight), moveKeyboard(fight), roundImage);
-      await this.saveFight(fight);
+      await this.resolveFightTurn(fight, chatId, messageId);
       return;
     }
 
@@ -1192,47 +1277,46 @@ export class FightRoom extends DurableObject {
         return;
       }
 
-      const outcome = resolveRound(fight.player1, fight.player2);
-      fight.player1.hp = Math.min(MAX_HP, Math.max(0, fight.player1.hp - outcome.p1Damage + outcome.p1Heal));
-      fight.player2.hp = Math.min(MAX_HP, Math.max(0, fight.player2.hp - outcome.p2Damage + outcome.p2Heal));
-      fight.last_result = outcome.lines;
-      const roundImage = pickRoundImage(outcome);
-      const winner = winnerFromHp(fight.player1.hp, fight.player2.hp);
+      await this.resolveFightTurn(fight, chatId, messageId);
+      return;
+    }
 
-      if (winner !== null) {
-        fight.phase = "finished";
-        const scoreText = await this.recordResultAndFormat(fight, winner);
-        await updateRoundMessage(this.env, fight, chatId, messageId, renderFinished(fight, winner) + scoreText, null, roundImage);
+    if (action === "dd") {
+      if (parts.length !== 4 || fight.phase !== "death_duel" || !fight.player2) return answerCallback(this.env, query.id, "دوئل مرگ فعال نیست.", true);
+      const callbackRound = Number(parts[2]);
+      const choice = parts[3];
+      if (!Number.isInteger(callbackRound) || callbackRound !== fight.dd_round) return answerCallback(this.env, query.id, "این دکمه مربوط به راند قبلی است.", true);
+      if (!DEATH_DUEL_LABELS[choice]) return answerCallback(this.env, query.id, "انتخاب نامعتبر است.", true);
+
+      let player;
+      if (user.id === fight.player1.user_id) player = fight.player1;
+      else if (user.id === fight.player2.user_id) player = fight.player2;
+      else return answerCallback(this.env, query.id, "⛔ شما در این دوئل حضور ندارید.", true);
+
+      if (player.move) return answerCallback(this.env, query.id, "انتخابت قبلاً ثبت شده و قابل تغییر نیست.", true);
+      player.move = { choice };
+      await this.saveFight(fight);
+      await answerCallback(this.env, query.id, `✅ ثبت شد: ${DEATH_DUEL_LABELS[choice]}`);
+
+      if (!fight.player1.move || !fight.player2.move) return;
+
+      const ddResult = resolveDeathDuel(fight.player1.move.choice, fight.player2.move.choice);
+      if (ddResult === 0) {
+        fight.last_result = [
+          `${mentionHtml(fight.player1)}: ${DEATH_DUEL_LABELS[fight.player1.move.choice]} | ${mentionHtml(fight.player2)}: ${DEATH_DUEL_LABELS[fight.player2.move.choice]}`,
+          "🤝 مساوی شد! دوباره انتخاب کنید.",
+        ];
+        fight.player1.move = null;
+        fight.player2.move = null;
+        fight.dd_round += 1;
+        await updateRoundMessage(this.env, fight, chatId, messageId, renderDeathDuel(fight), deathDuelKeyboard(fight), null);
         await this.saveFight(fight);
         return;
       }
 
-      fight.player1.move = null;
-      fight.player2.move = null;
-      fight.round_number += 1;
-
-      const poisonLines = [];
-      for (const playerToProcess of [fight.player1, fight.player2]) {
-        if (playerToProcess.poison_damage > 0) {
-          const poison = playerToProcess.poison_damage;
-          playerToProcess.hp = Math.max(0, playerToProcess.hp - poison);
-          playerToProcess.poison_damage = 0;
-          poisonLines.push(`☠️ پوشن روی ${displayName(playerToProcess)} اثر کرد: -${poison} HP.`);
-        }
-      }
-      if (poisonLines.length) fight.last_result.push(...poisonLines);
-      if (fight.round_number === 4) fight.last_result.push("⚡ قدرت‌های ویژه شارژ شدند! از راند ۴ هر بازیکن فقط یک بار می‌تواند از آن استفاده کند.");
-
-      const poisonWinner = winnerFromHp(fight.player1.hp, fight.player2.hp);
-      if (poisonWinner !== null) {
-        fight.phase = "finished";
-        const scoreText = await this.recordResultAndFormat(fight, poisonWinner);
-        await updateRoundMessage(this.env, fight, chatId, messageId, renderFinished(fight, poisonWinner) + scoreText, null, roundImage);
-        await this.saveFight(fight);
-        return;
-      }
-
-      await updateRoundMessage(this.env, fight, chatId, messageId, renderArena(fight), moveKeyboard(fight), roundImage);
+      fight.phase = "finished";
+      const scoreText = await this.recordResultAndFormat(fight, ddResult);
+      await updateRoundMessage(this.env, fight, chatId, messageId, renderDeathDuelFinished(fight, ddResult) + scoreText, null, null);
       await this.saveFight(fight);
       return;
     }
