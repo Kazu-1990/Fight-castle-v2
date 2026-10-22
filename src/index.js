@@ -415,10 +415,14 @@ export class FightRoom extends DurableObject {
   }
 
   // اگر کاربر ثبت‌نام نکرده باشد پیام ثبت‌نام می‌فرستد و false برمی‌گرداند
-  async requireRegistered(chatId, user) {
-    const res = await callRegistry(this.env, "getProfile", { user_id: user.id });
+  async requireRegistered(chatId, user, allowWhenOff = false) {
+    const res = await callRegistry(this.env, "getProfile", { user_id: user.id, username: user.username || null });
     if (res === null) {
       await sendText(this.env, chatId, "⚠️ مشکلی پیش آمد، چند لحظه دیگر دوباره تلاش کن.");
+      return null;
+    }
+    if (res.enabled === false && !allowWhenOff) {
+      await sendText(this.env, chatId, "⛔ کارمند، ربات را خاموش کرده است.");
       return null;
     }
     if (!res.profile) {
@@ -461,7 +465,9 @@ export class FightRoom extends DurableObject {
 
     const staff = isStaff(user.id);
     // همه (حتی کارمندها) باید ثبت‌نام کرده باشند
-    const profile = await this.requireRegistered(chat.id, user);
+    // وقتی ربات خاموش است فقط /log و /cancel کارمندها کار می‌کند
+    const allowWhenOff = staff && ["/log", "/cancel"].includes(cmd);
+    const profile = await this.requireRegistered(chat.id, user, allowWhenOff);
     if (!profile) return;
 
     if (cmd === "/log" || cmd === "/list") {
@@ -537,6 +543,13 @@ export class FightRoom extends DurableObject {
       return;
     }
 
+    // ربات خاموش: هیچ دکمه‌ای (ورود، حرکت، ...) کار نمی‌کند
+    const state = await callRegistry(this.env, "getState");
+    if (state?.enabled === false) {
+      await answerCallback(this.env, query.id, "⛔ کارمند، ربات را خاموش کرده است.", true);
+      return;
+    }
+
     const fight = await this.getFight();
     if (!fight) {
       await answerCallback(this.env, query.id, "این مبارزه دیگر فعال نیست.", true);
@@ -583,7 +596,7 @@ export class FightRoom extends DurableObject {
     if (action === "join") {
       let joinProfile = null;
       if (fight.phase === "waiting_p2" && user.id !== fight.player1.user_id) {
-        const res = await callRegistry(this.env, "getProfile", { user_id: user.id });
+        const res = await callRegistry(this.env, "getProfile", { user_id: user.id, username: user.username || null });
         joinProfile = res?.profile || null;
         if (!joinProfile) {
           await answerCallback(this.env, query.id, "📝 برای ورود به مبارزه باید اول ثبت‌نام کنی.", true);
