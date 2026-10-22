@@ -1,4 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
+import { isStaff } from "./staff.js";
+import { callRegistry, registryStub, sendRegisterPrompt, formatLogMessages, REG_RACE_TO_KEY } from "./registry.js";
+import { handleRegistryRequest } from "./registration.js";
 
 const MAX_HP = 200;
 
@@ -15,7 +18,7 @@ const SPECIAL_LABELS = {
   vamp: "🧛 قدرت ویژه: گاز گرفتن گردن",
   witcher: "⚔️ قدرت ویژه: ضربه پوشن",
   wolf: "🐺 قدرت ویژه: گاز گرفتن دست",
-  elf: "🧝 قدرت ویژه: ریشه‌های التیام‌بخش",
+  elf: "🧝 قدرت ویژه: تیر الف",
 };
 
 const MOVE_LABELS = {
@@ -41,16 +44,18 @@ function randomToken() {
   return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-function makePlayer(user) {
+function makePlayer(user, profile = null) {
   return {
     user_id: user.id,
-    first_name: user.first_name || "Player",
-    username: user.username || null,
-    race: null,
+    // اسم مبارز = اسم ثبت‌نام + خاندان (مثلاً Asher Stalker)
+    first_name: profile ? `${profile.name} ${profile.family}` : user.first_name || "Player",
+    username: profile ? null : user.username || null,
+    race: profile ? REG_RACE_TO_KEY[profile.race] || null : null,
     hp: MAX_HP,
     move: null,
     special_used: false,
     poison_damage: 0,
+    arrow_pending: 0,
   };
 }
 
@@ -189,6 +194,12 @@ function resolveRound(p1, p2) {
   let p2Heal = 0;
   const lines = [];
 
+  // تیر الفی که راند قبل زده شده و در این راند منفجر می‌شود (قبل از ثبت تیر جدید)
+  const p1Arrow = p1.arrow_pending || 0;
+  const p2Arrow = p2.arrow_pending || 0;
+  p1.arrow_pending = 0;
+  p2.arrow_pending = 0;
+
   const isDefend = (move, location = null) => move?.kind === "defend" && (location === null || move.location === location);
 
   if (p1Move.kind === "special" || p2Move.kind === "special") {
@@ -219,12 +230,13 @@ function resolveRound(p1, p2) {
           lines.push("🐺 قدرت ویژه گرگینه بازیکن ۱ فعال نشد؛ حریف دفاع نکرد.");
         }
       } else if (p1.race === "elf") {
-        if (p2Move.kind === "defend") {
-          p1Heal += 45;
-          lines.push("🧝 ریشه‌ها از زمین بیرون آمدند و بازیکن ۱ را التیام دادند.");
-          lines.push("❤️ بازیکن ۱: +45 HP");
+        if (isDefend(p2Move, "body")) {
+          lines.push("🛡 قدرت ویژه الف بازیکن ۱ دفع شد؛ بازیکن ۲ از بدن دفاع کرد.");
         } else {
-          lines.push("🧝 قدرت ویژه الف بازیکن ۱ از بین رفت؛ حریف حمله کرد.");
+          p2Damage += 25;
+          p2.arrow_pending = 20;
+          lines.push("🏹 بازیکن ۱ تیری به بدن حریف پرتاب کرد.");
+          lines.push("💥 بازیکن ۲: -25 HP | ⏳ تیر در بدنش مانده و راند بعد منفجر می‌شود.");
         }
       }
     }
@@ -256,12 +268,13 @@ function resolveRound(p1, p2) {
           lines.push("🐺 قدرت ویژه گرگینه بازیکن ۲ فعال نشد؛ حریف دفاع نکرد.");
         }
       } else if (p2.race === "elf") {
-        if (p1Move.kind === "defend") {
-          p2Heal += 45;
-          lines.push("🧝 ریشه‌ها از زمین بیرون آمدند و بازیکن ۲ را التیام دادند.");
-          lines.push("❤️ بازیکن ۲: +45 HP");
+        if (isDefend(p1Move, "body")) {
+          lines.push("🛡 قدرت ویژه الف بازیکن ۲ دفع شد؛ بازیکن ۱ از بدن دفاع کرد.");
         } else {
-          lines.push("🧝 قدرت ویژه الف بازیکن ۲ از بین رفت؛ حریف حمله کرد.");
+          p1Damage += 25;
+          p1.arrow_pending = 20;
+          lines.push("🏹 بازیکن ۲ تیری به بدن حریف پرتاب کرد.");
+          lines.push("💥 بازیکن ۱: -25 HP | ⏳ تیر در بدنش مانده و راند بعد منفجر می‌شود.");
         }
       }
     }
@@ -314,6 +327,16 @@ function resolveRound(p1, p2) {
     lines.push(`🛡 بازیکن ۱ از ${LOCATION_FA[p1Move.location]} دفاع کرد.`);
     lines.push(`🛡 بازیکن ۲ از ${LOCATION_FA[p2Move.location]} دفاع کرد.`);
     lines.push("🛡 هر دو بازیکن دفاع کردند؛ این راند بدون آسیب تمام شد.");
+  }
+
+  // انفجار تیر الف: ۲۰ دمیج غیرقابل دفاع، بدون توجه به اتفاقات این راند
+  if (p1Arrow > 0) {
+    p1Damage += p1Arrow;
+    lines.push(`🏹💥 تیر الف در بدن بازیکن ۱ منفجر شد؛ ${p1Arrow} HP آسیب غیرقابل دفاع!`);
+  }
+  if (p2Arrow > 0) {
+    p2Damage += p2Arrow;
+    lines.push(`🏹💥 تیر الف در بدن بازیکن ۲ منفجر شد؛ ${p2Arrow} HP آسیب غیرقابل دفاع!`);
   }
 
   return { p1Damage, p2Damage, p1Heal, p2Heal, lines };
@@ -372,17 +395,45 @@ async function editText(env, chatId, messageId, text, replyMarkup) {
   return telegramApi(env, "editMessageText", payload);
 }
 
+const TG = { telegramApi, sendText, editText, answerCallback };
+
 export class FightRoom extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
   }
 
   async getFight() { return (await this.ctx.storage.get("fight")) || null; }
-  async saveFight(fight) { await this.ctx.storage.put("fight", fight); }
+  async saveFight(fight) {
+    // ثبت نتیجه مبارزه در لاگ (فقط یک بار)
+    if (fight.phase === "finished" && !fight.logged && fight.player2) {
+      fight.logged = true;
+      const w = winnerFromHp(fight.player1.hp, fight.player2.hp);
+      const winnerId = w === 1 ? fight.player1.user_id : w === 2 ? fight.player2.user_id : 0;
+      await callRegistry(this.env, "logFight", { p1: fight.player1.user_id, p2: fight.player2.user_id, winner: winnerId });
+    }
+    await this.ctx.storage.put("fight", fight);
+  }
+
+  // اگر کاربر ثبت‌نام نکرده باشد پیام ثبت‌نام می‌فرستد و false برمی‌گرداند
+  async requireRegistered(chatId, user) {
+    const res = await callRegistry(this.env, "getProfile", { user_id: user.id });
+    if (res === null) {
+      await sendText(this.env, chatId, "⚠️ مشکلی پیش آمد، چند لحظه دیگر دوباره تلاش کن.");
+      return null;
+    }
+    if (!res.profile) {
+      await sendRegisterPrompt(this.env, TG, chatId, user);
+      return null;
+    }
+    return res.profile;
+  }
   async clearFight() { await this.ctx.storage.delete("fight"); }
 
   async fetch(request) {
     if (request.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
+    if (new URL(request.url).hostname === "registry.internal") {
+      return handleRegistryRequest(this.ctx.storage, this.env, request, TG);
+    }
     let update;
     try { update = await request.json(); }
     catch { return new Response("Bad Request", { status: 400 }); }
@@ -405,6 +456,28 @@ export class FightRoom extends DurableObject {
     const cmd = commandFromText(message.text);
     if (!cmd || !chat || !user) return;
 
+    // دستورهایی که در گروه جواب می‌دهند؛ بقیه (مثل /edit) نادیده گرفته می‌شوند
+    if (!["/start", "/fight", "/cancel", "/log", "/list"].includes(cmd)) return;
+
+    const staff = isStaff(user.id);
+    // همه (حتی کارمندها) باید ثبت‌نام کرده باشند
+    const profile = await this.requireRegistered(chat.id, user);
+    if (!profile) return;
+
+    if (cmd === "/log" || cmd === "/list") {
+      if (!staff) {
+        await sendText(this.env, chat.id, "⛔ این دستور فقط برای کارمندان است.");
+        return;
+      }
+      if (cmd === "/list") {
+        await sendText(this.env, chat.id, "ℹ️ این دستور فقط در پیوی ربات کار می‌کند.");
+        return;
+      }
+      const res = await callRegistry(this.env, "getLogs");
+      for (const chunk of formatLogMessages(res?.entries || [])) await sendText(this.env, chat.id, chunk);
+      return;
+    }
+
     if (cmd === "/start" || cmd === "/fight") {
       if (chat.type !== "group" && chat.type !== "supergroup") {
         await sendText(this.env, chat.id, "⚔️ این بازی برای گروه ساخته شده.\nربات را به یک گروه اضافه کن و /fight را بزن.");
@@ -413,23 +486,23 @@ export class FightRoom extends DurableObject {
 
       const current = await this.getFight();
       if (current && current.phase !== "finished") {
-        await sendText(this.env, chat.id, "⛔ در این گروه یک مبارزه فعال وجود دارد.\nبرای لغو، بازیکن اول می‌تواند /cancel را بزند.");
+        await sendText(this.env, chat.id, "⛔ در این گروه یک مبارزه فعال وجود دارد.\nبرای لغو، بازیکنان مبارزه یا کارمندان می‌توانند /cancel را بزنند.");
         return;
       }
 
       const fight = {
         chat_id: chat.id,
         token: randomToken(),
-        player1: makePlayer(user),
+        player1: makePlayer(user, profile),
         player2: null,
-        phase: "p1_race",
+        phase: "waiting_p2",
         round_number: 1,
         message_id: null,
         last_result: [],
       };
 
       await this.saveFight(fight);
-      const sent = await sendText(this.env, chat.id, renderP1Race(fight), raceKeyboard(fight, "p1"));
+      const sent = await sendText(this.env, chat.id, renderWaiting(fight), joinKeyboard(fight));
       if (sent?.message_id) {
         fight.message_id = sent.message_id;
         await this.saveFight(fight);
@@ -443,11 +516,13 @@ export class FightRoom extends DurableObject {
         await sendText(this.env, chat.id, "ℹ️ مبارزه فعالی وجود ندارد.");
         return;
       }
-      if (user.id !== fight.player1.user_id) {
-        await sendText(this.env, chat.id, "⛔ فقط بازیکنی که مبارزه را شروع کرده می‌تواند آن را لغو کند.");
+      const isFighter = user.id === fight.player1.user_id || (fight.player2 && user.id === fight.player2.user_id);
+      if (!isFighter && !staff) {
+        await sendText(this.env, chat.id, "⛔ فقط دو بازیکن مبارزه یا کارمندان می‌توانند آن را لغو کنند.");
         return;
       }
       await this.clearFight();
+      await callRegistry(this.env, "logCancel", { user_id: user.id });
       await sendText(this.env, chat.id, "🛑 مبارزه لغو شد. برای بازی جدید /fight را بزن.");
     }
   }
@@ -506,13 +581,23 @@ export class FightRoom extends DurableObject {
     }
 
     if (action === "join") {
+      let joinProfile = null;
+      if (fight.phase === "waiting_p2" && user.id !== fight.player1.user_id) {
+        const res = await callRegistry(this.env, "getProfile", { user_id: user.id });
+        joinProfile = res?.profile || null;
+        if (!joinProfile) {
+          await answerCallback(this.env, query.id, "📝 برای ورود به مبارزه باید اول ثبت‌نام کنی.", true);
+          if (res) await sendRegisterPrompt(this.env, TG, chatId, user);
+          return;
+        }
+      }
       if (fight.phase !== "waiting_p2") return answerCallback(this.env, query.id, "امکان ورود به این مبارزه وجود ندارد.", true);
       if (user.id === fight.player1.user_id) return answerCallback(this.env, query.id, "نمی‌توانی با خودت مبارزه کنی 😄", true);
-      fight.player2 = makePlayer(user);
-      fight.phase = "p2_race";
+      fight.player2 = makePlayer(user, joinProfile);
+      fight.phase = "active";
       await this.saveFight(fight);
-      await answerCallback(this.env, query.id, "⚔️ وارد مبارزه شدی!");
-      await editText(this.env, chatId, messageId, renderP2Race(fight), raceKeyboard(fight, "p2"));
+      await answerCallback(this.env, query.id, "⚔️ وارد مبارزه شدی! مبارزه شروع شد!");
+      await editText(this.env, chatId, messageId, renderArena(fight), moveKeyboard(fight));
       return;
     }
 
@@ -667,8 +752,15 @@ async function setupTelegramWebhook(request, env) {
     commands: [
       { command: "fight", description: "شروع یک مبارزه جدید" },
       { command: "start", description: "شروع بازی" },
-      { command: "cancel", description: "لغو مبارزه‌ای که شروع کرده‌اید" },
+      { command: "cancel", description: "لغو مبارزه فعال (بازیکنان و کارمندان)" },
     ],
+  });
+  await telegramApi(env, "setMyCommands", {
+    commands: [
+      { command: "start", description: "ثبت‌نام" },
+      { command: "edit", description: "ویرایش پروفایل" },
+    ],
+    scope: { type: "all_private_chats" },
   });
   return Response.json({ ok: Boolean(webhook), webhook_url: webhookUrl, commands_set: Boolean(commands) });
 }
@@ -710,6 +802,16 @@ export default {
 
       const chatId = update.message?.chat?.id ?? update.callback_query?.message?.chat?.id ?? null;
       if (chatId === null) return new Response("ignored");
+
+      // چت‌های خصوصی (ثبت‌نام، /edit، /list، /log) به رجیستری می‌روند
+      const chat = update.message?.chat ?? update.callback_query?.message?.chat;
+      if (chat?.type === "private") {
+        return registryStub(env).fetch("https://registry.internal/update", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(update),
+        });
+      }
 
       const id = env.FIGHT_ROOMS.idFromName(String(chatId));
       const room = env.FIGHT_ROOMS.get(id);
