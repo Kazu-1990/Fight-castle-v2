@@ -97,15 +97,24 @@ function logKey(t) {
   return `log:${String(t).padStart(15, "0")}:${Math.random().toString(36).slice(2, 8)}`;
 }
 
+// یوزرنیم تلگرام (اگر داشت)، وگرنه آیدی عددی
+function who(entry, field) {
+  const id = entry[field];
+  const name = entry[`n_${field}`];
+  return name ? `@${name}` : `آیدی ${id}`;
+}
+
 function logLine(entry) {
   const time = formatTime(entry.t);
-  if (entry.type === "register") return `🆕 ${time} — آیدی ${entry.uid} ثبت‌نام کرد.`;
-  if (entry.type === "edit") return `✏️ ${time} — آیدی ${entry.uid} پروفایلش را ویرایش کرد.`;
-  if (entry.type === "delete") return `🗑 ${time} — آیدی ${entry.uid} آیدی ${entry.target} را حذف کرد.`;
-  if (entry.type === "cancel") return `🛑 ${time} — آیدی ${entry.uid} مبارزه را کنسل کرد.`;
+  if (entry.type === "register") return `🆕 ${time} — ${who(entry, "uid")} ثبت‌نام کرد.`;
+  if (entry.type === "edit") return `✏️ ${time} — ${who(entry, "uid")} پروفایلش را ویرایش کرد.`;
+  if (entry.type === "delete") return `🗑 ${time} — ${who(entry, "uid")} ${who(entry, "target")} را حذف کرد.`;
+  if (entry.type === "cancel") return `🛑 ${time} — ${who(entry, "uid")} مبارزه را کنسل کرد.`;
+  if (entry.type === "off") return `🔴 ${time} — ${who(entry, "uid")} ربات را خاموش کرد.`;
+  if (entry.type === "on") return `🟢 ${time} — ${who(entry, "uid")} ربات را روشن کرد.`;
   if (entry.type === "fight") {
-    const result = entry.winner ? `آیدی ${entry.winner} برنده شد.` : "مبارزه مساوی شد.";
-    return `⚔️ ${time} — آیدی ${entry.p1} با آیدی ${entry.p2} مبارزه کرد و ${result}`;
+    const result = entry.winner ? `${entry.winner === entry.p1 ? who(entry, "p1") : who(entry, "p2")} برنده شد.` : "مبارزه مساوی شد.";
+    return `⚔️ ${time} — ${who(entry, "p1")} با ${who(entry, "p2")} مبارزه کرد و ${result}`;
   }
   return `${time} — ${entry.type}`;
 }
@@ -162,7 +171,19 @@ export class Registry {
   async addLog(entry) {
     await this.pruneLogs();
     const t = Date.now();
-    await this.s.put(logKey(t), { t, ...entry });
+    const full = { t, ...entry };
+    // یوزرنیم فعلی هر آیدی را همان لحظه کنار لاگ ذخیره می‌کنیم
+    for (const field of ["uid", "target", "p1", "p2"]) {
+      if (full[field]) full[`n_${field}`] = (await this.getUser(full[field]))?.username || null;
+    }
+    await this.s.put(logKey(t), full);
+  }
+
+  async isEnabled() {
+    return (await this.s.get("bot:enabled")) !== false;
+  }
+  async setEnabled(value) {
+    await this.s.put("bot:enabled", Boolean(value));
   }
 
   async readLogs() {
