@@ -302,7 +302,7 @@ function resolveRound(p1, p2) {
   } else if (p1Move.kind === "attack" && p2Move.kind === "defend") {
     const damage = ATTACK_DAMAGE[p1Move.location];
     if (p1Move.location === p2Move.location) {
-      const penalty = damage - 5;
+      const penalty = damage; // دفاع درست: کل دمیج به حمله‌کننده برمی‌گردد
       p1Damage += penalty;
       lines.push(`🛡 بازیکن ۲ حمله به ${LOCATION_FA[p1Move.location]} را درست دفاع کرد.`);
       lines.push(`↩️ حمله دفع شد؛ بازیکن ۱: -${penalty} HP`);
@@ -314,7 +314,7 @@ function resolveRound(p1, p2) {
   } else if (p1Move.kind === "defend" && p2Move.kind === "attack") {
     const damage = ATTACK_DAMAGE[p2Move.location];
     if (p2Move.location === p1Move.location) {
-      const penalty = damage - 5;
+      const penalty = damage; // دفاع درست: کل دمیج به حمله‌کننده برمی‌گردد
       p2Damage += penalty;
       lines.push(`🛡 بازیکن ۱ حمله به ${LOCATION_FA[p2Move.location]} را درست دفاع کرد.`);
       lines.push(`↩️ حمله دفع شد؛ بازیکن ۲: -${penalty} HP`);
