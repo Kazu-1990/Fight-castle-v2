@@ -211,11 +211,11 @@ function resolveRound(p1, p2) {
         if (isDefend(p2Move, "head")) {
           lines.push("🛡 قدرت ویژه ومپایر بازیکن ۱ دفع شد؛ بازیکن ۲ از سر دفاع کرد.");
         } else {
-          p2Damage += 20;
+          p2Damage += 25;
           p1Heal += 20;
           specialHits.push("vamp");
           lines.push("🧛 بازیکن ۱ جلو رفت و گردن حریف را گاز گرفت.");
-          lines.push("🩸 بازیکن ۲: -20 HP | ❤️ بازیکن ۱: +20 HP");
+          lines.push("🩸 بازیکن ۲: -25 HP | ❤️ بازیکن ۱: +20 HP");
         }
       } else if (p1.race === "witcher") {
         if (isDefend(p2Move, "head")) {
@@ -253,11 +253,11 @@ function resolveRound(p1, p2) {
         if (isDefend(p1Move, "head")) {
           lines.push("🛡 قدرت ویژه ومپایر بازیکن ۲ دفع شد؛ بازیکن ۱ از سر دفاع کرد.");
         } else {
-          p1Damage += 20;
+          p1Damage += 25;
           p2Heal += 20;
           specialHits.push("vamp");
           lines.push("🧛 بازیکن ۲ جلو رفت و گردن حریف را گاز گرفت.");
-          lines.push("🩸 بازیکن ۱: -20 HP | ❤️ بازیکن ۲: +20 HP");
+          lines.push("🩸 بازیکن ۱: -25 HP | ❤️ بازیکن ۲: +20 HP");
         }
       } else if (p2.race === "witcher") {
         if (isDefend(p1Move, "head")) {
