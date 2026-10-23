@@ -110,6 +110,7 @@ function logLine(entry) {
   if (entry.type === "edit") return `✏️ ${time} — ${who(entry, "uid")} پروفایلش را ویرایش کرد.`;
   if (entry.type === "delete") return `🗑 ${time} — ${who(entry, "uid")} ${who(entry, "target")} را حذف کرد.`;
   if (entry.type === "cancel") return `🛑 ${time} — ${who(entry, "uid")} مبارزه را کنسل کرد.`;
+  if (entry.type === "reset") return `🔄 ${time} — ${who(entry, "uid")} و ${who(entry, "target")} ریست جدول Board را نهایی کردند.`;
   if (entry.type === "off") return `🔴 ${time} — ${who(entry, "uid")} ربات را خاموش کرد.`;
   if (entry.type === "on") return `🟢 ${time} — ${who(entry, "uid")} ربات را روشن کرد.`;
   if (entry.type === "fight") {
@@ -122,6 +123,17 @@ function logLine(entry) {
 export function formatLogMessages(entries) {
   if (!entries.length) return ["ℹ️ در ۴۸ ساعت گذشته رویدادی ثبت نشده است."];
   const lines = ["📜 <b>لاگ ۴۸ ساعت گذشته</b> (به وقت تهران)", ""].concat(entries.map((e) => esc(logLine(e))));
+  return chunkLines(lines);
+}
+
+// جدول Board: فقط افرادی که حداقل یک برد دارند، مرتب‌شده بر اساس درصد برد
+export function formatBoardMessages(rows) {
+  if (!rows.length) return ["ℹ️ هنوز هیچ‌کس برد ثبت‌شده‌ای ندارد."];
+  const lines = ["🏆 <b>Board</b>", ""];
+  rows.forEach((r, i) => {
+    const pct = Math.round((r.wins / r.games) * 1000) / 10;
+    lines.push(`${i + 1}. ${esc(r.name)} ${esc(r.family)} — 🎮 ${r.games} | 🏆 ${r.wins} | 📊 ${pct}%`);
+  });
   return chunkLines(lines);
 }
 
@@ -177,6 +189,34 @@ export class Registry {
       if (full[field]) full[`n_${field}`] = (await this.getUser(full[field]))?.username || null;
     }
     await this.s.put(logKey(t), full);
+  }
+
+  // آمار بازی‌های تمام‌شده (مبارزه کنسل‌شده ثبت نمی‌شود)
+  async recordFight(p1, p2, winner) {
+    for (const id of [p1, p2]) {
+      const u = await this.getUser(id);
+      if (!u) continue;
+      u.games = (u.games || 0) + 1;
+      if (winner && winner === id) u.wins = (u.wins || 0) + 1;
+      await this.putUser(u);
+    }
+  }
+
+  async getBoard() {
+    const users = (await this.allUsers()).filter((u) => (u.wins || 0) >= 1 && (u.games || 0) >= 1);
+    return users
+      .map((u) => ({ name: u.name, family: u.family, games: u.games, wins: u.wins }))
+      .sort((a, b) => b.wins / b.games - a.wins / a.games || b.wins - a.wins || a.games - b.games);
+  }
+
+  async resetBoard() {
+    for (const u of await this.allUsers()) {
+      if (u.games || u.wins) {
+        u.games = 0;
+        u.wins = 0;
+        await this.putUser(u);
+      }
+    }
   }
 
   async isEnabled() {
