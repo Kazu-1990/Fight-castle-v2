@@ -125,6 +125,10 @@ async function handlePrivateMessage(reg, env, tg, message) {
   if (staff && profile) {
     if (cmd === "/on") return toggleBot(reg, env, tg, chatId, user.id, true);
     if (cmd === "/off") return toggleBot(reg, env, tg, chatId, user.id, false);
+    if (cmd === "/board" || cmd === "/reset") {
+      await tg.sendText(env, chatId, "ℹ️ این دستور فقط در گروه کار می‌کند.");
+      return;
+    }
     if (cmd === "/list") return sendList(reg, env, tg, chatId, user.id);
     if (cmd === "/log") return sendLogs(reg, env, tg, chatId);
     const m = text.match(/^حذف\s+([0-9۰-۹]+)$/);
@@ -151,7 +155,7 @@ async function handlePrivateMessage(reg, env, tg, message) {
 
   if (cmd) {
     if (!profile) return startRegistration(reg, env, tg, chatId, user.id, "new");
-    if (cmd === "/list" || cmd === "/log" || cmd === "/on" || cmd === "/off") {
+    if (cmd === "/list" || cmd === "/log" || cmd === "/on" || cmd === "/off" || cmd === "/board" || cmd === "/reset") {
       await tg.sendText(env, chatId, "⛔ این دستور فقط برای کارمندان است.");
       return;
     }
@@ -204,7 +208,7 @@ async function handlePrivateCallback(reg, env, tg, query) {
       const existing = await reg.getUser(user.id);
       const record = existing
         ? { ...existing, username: user.username || null, name: pending.name, family: pending.family, race: parts[2], updated_at: now, edits: (existing.edits || 0) + 1 }
-        : { user_id: user.id, username: user.username || null, name: pending.name, family: pending.family, race: parts[2], registered_at: now, updated_at: now, edits: 0 };
+        : { user_id: user.id, username: user.username || null, name: pending.name, family: pending.family, race: parts[2], registered_at: now, updated_at: now, edits: 0, games: 0, wins: 0 };
       await reg.putUser(record);
       await reg.clearPending(user.id);
       await reg.addLog({ type: existing ? "edit" : "register", uid: user.id });
@@ -278,8 +282,15 @@ export async function handleRegistryRequest(storage, env, request, tg) {
       }
       return Response.json({ profile, enabled: await reg.isEnabled() });
     }
+    if (op === "getBoard") return Response.json({ rows: await reg.getBoard() });
+    if (op === "resetBoard") {
+      await reg.resetBoard();
+      await reg.addLog({ type: "reset", uid: data.by, target: data.confirmer });
+      return Response.json({ ok: true });
+    }
     if (op === "getState") return Response.json({ enabled: await reg.isEnabled() });
     if (op === "logFight") {
+      await reg.recordFight(data.p1, data.p2, data.winner || 0);
       await reg.addLog({ type: "fight", p1: data.p1, p2: data.p2, winner: data.winner || 0 });
       return Response.json({ ok: true });
     }
