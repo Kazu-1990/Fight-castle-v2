@@ -107,6 +107,14 @@ async function handlePrivateMessage(reg, env, tg, message) {
   const chatId = message.chat?.id;
   if (!user || chatId === undefined || message.chat.type !== "private") return;
 
+  // کارمند عکس بفرستد، file_id آن را دریافت می‌کند (برای images.js)
+  if (message.photo?.length) {
+    if (!isStaff(user.id)) return;
+    const fileId = message.photo[message.photo.length - 1].file_id;
+    await tg.sendText(env, chatId, `🖼 file_id این عکس:\n\n<code>${esc(fileId)}</code>\n\nآن را داخل <code>images.js</code> برای نژاد مورد نظر بین "" بگذار.`);
+    return;
+  }
+
   const text = (message.text || "").trim();
   if (!text) return;
   const cmd = parseCommand(text);
