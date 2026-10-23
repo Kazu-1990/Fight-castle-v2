@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { isStaff } from "./staff.js";
-import { callRegistry, registryStub, sendRegisterPrompt, formatLogMessages, REG_RACE_TO_KEY } from "./registry.js";
+import { callRegistry, registryStub, sendRegisterPrompt, formatLogMessages, formatBoardMessages, REG_RACE_TO_KEY } from "./registry.js";
 import { handleRegistryRequest } from "./registration.js";
 
 const MAX_HP = 200;
@@ -461,7 +461,7 @@ export class FightRoom extends DurableObject {
     if (!cmd || !chat || !user) return;
 
     // دستورهایی که در گروه جواب می‌دهند؛ بقیه (مثل /edit) نادیده گرفته می‌شوند
-    if (!["/start", "/fight", "/cancel", "/log", "/list"].includes(cmd)) return;
+    if (!["/start", "/fight", "/cancel", "/log", "/list", "/board", "/reset"].includes(cmd)) return;
 
     const staff = isStaff(user.id);
     // همه (حتی کارمندها) باید ثبت‌نام کرده باشند
@@ -481,6 +481,28 @@ export class FightRoom extends DurableObject {
       }
       const res = await callRegistry(this.env, "getLogs");
       for (const chunk of formatLogMessages(res?.entries || [])) await sendText(this.env, chat.id, chunk);
+      return;
+    }
+
+    if (cmd === "/board" || cmd === "/reset") {
+      if (!staff) {
+        await sendText(this.env, chat.id, "⛔ این دستور فقط برای کارمندان است.");
+        return;
+      }
+      if (cmd === "/board") {
+        const res = await callRegistry(this.env, "getBoard");
+        for (const chunk of formatBoardMessages(res?.rows || [])) await sendText(this.env, chat.id, chunk);
+        return;
+      }
+      // /reset: نیاز به تایید یک کارمند دیگر
+      const token = crypto.randomUUID().slice(0, 8);
+      await this.ctx.storage.put("reset_request", { token, by: user.id });
+      await sendText(this.env, chat.id, "🔄 برای پاک کردن کل اطلاعات جدول Board لازم است که یک کارمند دیگر تایید کند.", {
+        inline_keyboard: [[
+          { text: "❌ کنسل", callback_data: `rst|no|${token}` },
+          { text: "✅ تایید", callback_data: `rst|ok|${token}` },
+        ]],
+      });
       return;
     }
 
@@ -533,6 +555,41 @@ export class FightRoom extends DurableObject {
     }
   }
 
+  // تایید/کنسل ریست جدول Board
+  async handleResetCallback(query, parts) {
+    const user = query.from;
+    const chatId = query.message.chat.id;
+    const messageId = query.message.message_id;
+    const request = await this.ctx.storage.get("reset_request");
+    if (!request || request.token !== parts[2]) {
+      await answerCallback(this.env, query.id, "این درخواست دیگر معتبر نیست.", true);
+      return;
+    }
+    const res = isStaff(user.id) ? await callRegistry(this.env, "getProfile", { user_id: user.id, username: user.username || null }) : null;
+    if (!isStaff(user.id) || !res?.profile) {
+      await answerCallback(this.env, query.id, "⛔ فقط کارمندان ثبت‌نام‌شده.", true);
+      return;
+    }
+    if (parts[1] === "no") {
+      await this.ctx.storage.delete("reset_request");
+      await answerCallback(this.env, query.id, "لغو شد.");
+      await editText(this.env, chatId, messageId, "❎ ریست جدول Board لغو شد.");
+      return;
+    }
+    if (parts[1] === "ok") {
+      if (user.id === request.by) {
+        await answerCallback(this.env, query.id, "⛔ تایید باید توسط یک کارمند دیگر انجام شود.", true);
+        return;
+      }
+      await this.ctx.storage.delete("reset_request");
+      await callRegistry(this.env, "resetBoard", { by: request.by, confirmer: user.id });
+      await answerCallback(this.env, query.id, "✅ ریست شد.");
+      await editText(this.env, chatId, messageId, "✅ جدول Board ریست شد. تعداد بازی‌ها و بردها صفر شد.");
+      return;
+    }
+    await answerCallback(this.env, query.id, "دکمه ناشناخته است.", true);
+  }
+
   async handleCallback(query) {
     const parts = (query.data || "").split("|");
     const chatId = query.message?.chat?.id;
@@ -549,6 +606,8 @@ export class FightRoom extends DurableObject {
       await answerCallback(this.env, query.id, "⛔ کارمند، ربات را خاموش کرده است.", true);
       return;
     }
+
+    if (parts[0] === "rst") return this.handleResetCallback(query, parts);
 
     const fight = await this.getFight();
     if (!fight) {
