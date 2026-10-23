@@ -15,6 +15,7 @@ import {
   formatLogMessages,
 } from "./registry.js";
 
+const OFF_TEXT = "⛔ کارمند، ربات را خاموش کرده است.";
 const GROUP_ONLY_TEXT = "⚔️ این بازی برای گروه ساخته شده.\nربات را به یک گروه اضافه کن و /fight را بزن.";
 
 function toEnglishDigits(value) {
@@ -65,6 +66,17 @@ async function sendList(reg, env, tg, chatId, staffId) {
   for (const chunk of chunkLines(lines)) await tg.sendText(env, chatId, chunk);
 }
 
+async function toggleBot(reg, env, tg, chatId, userId, wantOn) {
+  const enabled = await reg.isEnabled();
+  if (enabled === wantOn) {
+    await tg.sendText(env, chatId, wantOn ? "ℹ️ ربات در حال حاضر روشن است." : "ℹ️ ربات در حال حاضر خاموش است.");
+    return;
+  }
+  await reg.setEnabled(wantOn);
+  await reg.addLog({ type: wantOn ? "on" : "off", uid: userId });
+  await tg.sendText(env, chatId, wantOn ? "🟢 ربات روشن شد و به حالت عادی برگشت." : "🔴 ربات خاموش شد. ثبت‌نام و مبارزه تا زمان /on غیرفعال است.");
+}
+
 async function sendLogs(reg, env, tg, chatId) {
   const entries = await reg.readLogs();
   for (const chunk of formatLogMessages(entries)) await tg.sendText(env, chatId, chunk);
@@ -103,12 +115,26 @@ async function handlePrivateMessage(reg, env, tg, message) {
   const profile = await reg.getUser(user.id);
   const pending = await reg.getPending(user.id);
 
+  // یوزرنیم تلگرام ممکن است عوض شده باشد
+  if (profile && (profile.username || null) !== (user.username || null)) {
+    profile.username = user.username || null;
+    await reg.putUser(profile);
+  }
+
   // کارمندها هم باید ثبت‌نام کرده باشند
   if (staff && profile) {
+    if (cmd === "/on") return toggleBot(reg, env, tg, chatId, user.id, true);
+    if (cmd === "/off") return toggleBot(reg, env, tg, chatId, user.id, false);
     if (cmd === "/list") return sendList(reg, env, tg, chatId, user.id);
     if (cmd === "/log") return sendLogs(reg, env, tg, chatId);
     const m = text.match(/^حذف\s+([0-9۰-۹]+)$/);
     if (m) return askDelete(reg, env, tg, chatId, user.id, Number(toEnglishDigits(m[1])));
+  }
+
+  // وقتی ربات خاموش است هیچ ثبت‌نام یا ویرایشی انجام نمی‌شود
+  if (!(await reg.isEnabled())) {
+    await tg.sendText(env, chatId, OFF_TEXT);
+    return;
   }
 
   if (cmd === "/edit") {
@@ -125,7 +151,7 @@ async function handlePrivateMessage(reg, env, tg, message) {
 
   if (cmd) {
     if (!profile) return startRegistration(reg, env, tg, chatId, user.id, "new");
-    if (cmd === "/list" || cmd === "/log") {
+    if (cmd === "/list" || cmd === "/log" || cmd === "/on" || cmd === "/off") {
       await tg.sendText(env, chatId, "⛔ این دستور فقط برای کارمندان است.");
       return;
     }
@@ -150,6 +176,10 @@ async function handlePrivateCallback(reg, env, tg, query) {
   if (!user || chatId === undefined || !messageId || query.message.chat.type !== "private") return;
 
   if (parts[0] === "rg") {
+    if (!(await reg.isEnabled())) {
+      await tg.answerCallback(env, query.id, OFF_TEXT, true);
+      return;
+    }
     const pending = await reg.getPending(user.id);
 
     if (parts[1] === "f") {
@@ -207,8 +237,8 @@ async function handlePrivateCallback(reg, env, tg, query) {
         await tg.editText(env, chatId, messageId, "ℹ️ این کاربر قبلاً حذف شده است.");
         return;
       }
-      await reg.deleteUser(uid);
       await reg.addLog({ type: "delete", uid: user.id, target: uid });
+      await reg.deleteUser(uid);
       await tg.answerCallback(env, query.id, "🗑 حذف شد.");
       await tg.editText(env, chatId, messageId, `🗑 <b>${esc(target.name)}</b> حذف شد.`);
       return;
@@ -240,7 +270,15 @@ export async function handleRegistryRequest(storage, env, request, tg) {
     try { data = await request.json(); } catch { /* empty */ }
 
     if (op === "isRegistered") return Response.json({ registered: Boolean(await reg.getUser(data.user_id)) });
-    if (op === "getProfile") return Response.json({ profile: await reg.getUser(data.user_id) });
+    if (op === "getProfile") {
+      const profile = await reg.getUser(data.user_id);
+      if (profile && "username" in data && (profile.username || null) !== (data.username || null)) {
+        profile.username = data.username || null;
+        await reg.putUser(profile);
+      }
+      return Response.json({ profile, enabled: await reg.isEnabled() });
+    }
+    if (op === "getState") return Response.json({ enabled: await reg.isEnabled() });
     if (op === "logFight") {
       await reg.addLog({ type: "fight", p1: data.p1, p2: data.p2, winner: data.winner || 0 });
       return Response.json({ ok: true });
