@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { isStaff } from "./staff.js";
 import { ULT_IMAGES } from "./images.js";
+import { DUEL_LABELS, duelWinner, duelResultLines, startDuel, duelKeyboard, renderDuel } from "./duel.js";
 import { callRegistry, registryStub, sendRegisterPrompt, formatLogMessages, formatBoardMessages, REG_RACE_TO_KEY } from "./registry.js";
 import { handleRegistryRequest } from "./registration.js";
 
@@ -431,7 +432,7 @@ export class FightRoom extends DurableObject {
     // ثبت نتیجه مبارزه در لاگ (فقط یک بار)
     if (fight.phase === "finished" && !fight.logged && fight.player2) {
       fight.logged = true;
-      const w = winnerFromHp(fight.player1.hp, fight.player2.hp);
+      const w = fight.duel_winner ?? winnerFromHp(fight.player1.hp, fight.player2.hp);
       const winnerId = w === 1 ? fight.player1.user_id : w === 2 ? fight.player2.user_id : 0;
       await callRegistry(this.env, "logFight", { p1: fight.player1.user_id, p2: fight.player2.user_id, winner: winnerId });
     }
@@ -611,6 +612,54 @@ export class FightRoom extends DurableObject {
     await editText(this.env, chatId, messageId, text, markup);
   }
 
+  duelText(fight) {
+    const label = (p) => `${raceText(p)}  ${mentionHtml(p)}`;
+    return renderDuel(fight, label(fight.player1), label(fight.player2), escapeHtml);
+  }
+
+  // دوئل مرگ (سنگ کاغذ قیچی): مشت / دفاع / جادو
+  async handleDuelCallback(query, fight, parts) {
+    const user = query.from;
+    if (parts.length !== 4 || fight.phase !== "duel" || !fight.player2) {
+      return answerCallback(this.env, query.id, "مبارزه در مرحله دوئل مرگ نیست.", true);
+    }
+    const round = Number(parts[2]);
+    const choice = parts[3];
+    if (!Number.isInteger(round) || round !== fight.duel.round) {
+      return answerCallback(this.env, query.id, "این دکمه مربوط به راند قبلی است.", true);
+    }
+    if (!DUEL_LABELS[choice]) return answerCallback(this.env, query.id, "انتخاب نامعتبر است.", true);
+
+    let player;
+    if (user.id === fight.player1.user_id) player = fight.player1;
+    else if (user.id === fight.player2.user_id) player = fight.player2;
+    else return answerCallback(this.env, query.id, "⛔ شما در این مبارزه حضور ندارید.", true);
+
+    if (player.duel_move) return answerCallback(this.env, query.id, "انتخابت قبلاً ثبت شده و قابل تغییر نیست.", true);
+    player.duel_move = choice;
+    await this.saveFight(fight);
+    await answerCallback(this.env, query.id, `✅ ثبت شد: ${DUEL_LABELS[choice]}`);
+
+    if (!fight.player1.duel_move || !fight.player2.duel_move) return;
+
+    const winner = duelWinner(fight.player1.duel_move, fight.player2.duel_move);
+    fight.last_result = duelResultLines(fight.player1.duel_move, fight.player2.duel_move, winner);
+    fight.player1.duel_move = null;
+    fight.player2.duel_move = null;
+
+    if (winner === 0) {
+      fight.duel.round += 1;
+      await this.saveFight(fight);
+      await this.deliver(query, this.duelText(fight), duelKeyboard(fight), null);
+      return;
+    }
+
+    fight.duel_winner = winner;
+    fight.phase = "finished";
+    await this.saveFight(fight);
+    await this.deliver(query, renderFinished(fight, winner), undefined, null);
+  }
+
   // تایید/کنسل ریست جدول Board
   async handleResetCallback(query, parts) {
     const user = query.from;
@@ -676,6 +725,8 @@ export class FightRoom extends DurableObject {
     }
 
     const action = parts[0];
+
+    if (action === "duel") return this.handleDuelCallback(query, fight, parts);
 
     if (action === "race") {
       if (parts.length !== 4 || !RACES[parts[3]]) {
@@ -758,6 +809,14 @@ export class FightRoom extends DurableObject {
       const imageKey = outcome.specialHits[0] || null;
       const winner = winnerFromHp(fight.player1.hp, fight.player2.hp);
 
+      // HP هر دو به صفر رسید: مساوی نمی‌شود، دوئل مرگ شروع می‌شود
+      if (fight.player1.hp <= 0 && fight.player2.hp <= 0) {
+        startDuel(fight);
+        await this.saveFight(fight);
+        await this.deliver(query, this.duelText(fight), duelKeyboard(fight), imageKey);
+        return;
+      }
+
       if (winner !== null) {
         fight.phase = "finished";
         await this.saveFight(fight);
@@ -820,6 +879,14 @@ export class FightRoom extends DurableObject {
       fight.last_result = outcome.lines;
       const imageKey = outcome.specialHits[0] || null;
       const winner = winnerFromHp(fight.player1.hp, fight.player2.hp);
+
+      // HP هر دو به صفر رسید: مساوی نمی‌شود، دوئل مرگ شروع می‌شود
+      if (fight.player1.hp <= 0 && fight.player2.hp <= 0) {
+        startDuel(fight);
+        await this.saveFight(fight);
+        await this.deliver(query, this.duelText(fight), duelKeyboard(fight), imageKey);
+        return;
+      }
 
       if (winner !== null) {
         fight.phase = "finished";
