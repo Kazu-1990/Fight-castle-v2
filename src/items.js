@@ -1,5 +1,5 @@
-// آیتم‌ها: سلاح، آرمور، Resolver و God Effect
-// هر نفر حداکثر یک Weapon (lvl 1..3)، یک Armor (lvl 1..3)، یک Resolver و یک God Effect دارد.
+// آیتم‌ها: سلاح، آرمور و God Effect
+// هر نفر حداکثر یک Weapon (lvl 1..3)، یک Armor (lvl 1..3) و یک God Effect دارد.
 
 export const BASE_STATS = {
   max_hp: 200,
@@ -9,7 +9,6 @@ export const BASE_STATS = {
 
 const WEAPON_BONUS = [0, 5, 10, 20];
 const ARMOR_BONUS = [0, 25, 50, 100];
-const RESOLVER_DEF = { head: 45, body: 35, leg: 30 };
 const GOD_HP = 100;
 const GOD_ATK = 20;
 
@@ -21,18 +20,17 @@ export const ITEM_DEFS = {
   a1: { slot: "armor", level: 1, label: "Armor lvl 1" },
   a2: { slot: "armor", level: 2, label: "Armor lvl 2" },
   a3: { slot: "armor", level: 3, label: "Armor lvl 3" },
-  res: { slot: "resolver", label: "Resolver" },
   god: { slot: "god", label: "God Effect" },
 };
 
 export function emptyItems() {
-  return { weapon: 0, armor: 0, resolver: false, god: false };
+  return { weapon: 0, armor: 0, god: false };
 }
 
 export function normalizeItems(items) {
   const i = items || {};
   const lvl = (v) => Math.max(0, Math.min(3, Math.trunc(Number(v)) || 0));
-  return { weapon: lvl(i.weapon), armor: lvl(i.armor), resolver: Boolean(i.resolver), god: Boolean(i.god) };
+  return { weapon: lvl(i.weapon), armor: lvl(i.armor), god: Boolean(i.god) };
 }
 
 export function itemLabels(items) {
@@ -40,7 +38,6 @@ export function itemLabels(items) {
   const out = [];
   if (i.weapon) out.push(`Weapon lvl ${i.weapon}`);
   if (i.armor) out.push(`Armor lvl ${i.armor}`);
-  if (i.resolver) out.push("Resolver");
   if (i.god) out.push("God Effect");
   return out;
 }
@@ -54,7 +51,6 @@ export function inventoryText(items) {
 export function statsFromItems(items) {
   const i = normalizeItems(items);
   const atkBonus = WEAPON_BONUS[i.weapon] + (i.god ? GOD_ATK : 0);
-  const def = i.resolver ? { ...RESOLVER_DEF } : { ...BASE_STATS.def };
   return {
     max_hp: BASE_STATS.max_hp + ARMOR_BONUS[i.armor] + (i.god ? GOD_HP : 0),
     atk: {
@@ -62,7 +58,7 @@ export function statsFromItems(items) {
       body: BASE_STATS.atk.body + atkBonus,
       leg: BASE_STATS.atk.leg + atkBonus,
     },
-    def,
+    def: { ...BASE_STATS.def },
   };
 }
 
@@ -89,7 +85,6 @@ export function shopKeyboard(uid) {
     inline_keyboard: [
       [b("w1"), b("w2"), b("w3")],
       [b("a1"), b("a2"), b("a3")],
-      [b("res")],
       [b("god")],
     ],
   };
