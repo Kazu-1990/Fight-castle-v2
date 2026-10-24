@@ -46,6 +46,7 @@ export function chunkLines(lines, max = 3800) {
   const chunks = [];
   let current = "";
   for (const line of lines) {
+    if (!line && !current) continue; // خط خالی اول هر پیام حذف می‌شود
     if (current && current.length + line.length + 1 > max) {
       chunks.push(current);
       current = "";
@@ -124,7 +125,12 @@ function logLine(entry) {
 
 export function formatLogMessages(entries) {
   if (!entries.length) return ["ℹ️ در ۴۸ ساعت گذشته رویدادی ثبت نشده است."];
-  const lines = ["📜 <b>لاگ ۴۸ ساعت گذشته</b> (به وقت تهران)", ""].concat(entries.map((e) => esc(logLine(e))));
+  // بین هر رویداد یک خط خالی می‌ماند تا خواندنش راحت‌تر باشد
+  const lines = ["📜 <b>لاگ ۴۸ ساعت گذشته</b> (به وقت تهران)", ""];
+  entries.forEach((e, i) => {
+    if (i > 0) lines.push("");
+    lines.push(esc(logLine(e)));
+  });
   return chunkLines(lines);
 }
 
