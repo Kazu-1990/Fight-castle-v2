@@ -89,6 +89,10 @@ function def(player, location) {
 function maxHpOf(player) {
   return player.stats?.max_hp ?? MAX_HP;
 }
+// تیک کنار اسم کسی که حرکتش را در این راند ثبت کرده
+function moveTick(player) {
+  return player.move ? " ✅" : "";
+}
 // آیتم‌های بازیکن، زیر اسمش
 function itemsLine(player) {
   return player.item_labels?.length ? `🎒 <i>${player.item_labels.map(escapeHtml).join(" • ")}</i>\n` : "";
@@ -130,9 +134,9 @@ function moveKeyboard(fight) {
       ],
       [
         { text: "🗡 حمله به پا", callback_data: `move|${t}|${r}|attack|leg` },
-        { text: specialReady ? "⚡ قدرت ویژه" : "⚡ قدرت ویژه (راند ۴)" , callback_data: `special|${t}|${r}` },
+        { text: "🛡 دفاع از پا", callback_data: `move|${t}|${r}|defend|leg` },
       ],
-      [{ text: "🛡 دفاع از پا", callback_data: `move|${t}|${r}|defend|leg` }],
+      [{ text: specialReady ? "⚡ Ultimate" : "⚡ Ultimate (راند ۴)", callback_data: `special|${t}|${r}` }],
     ],
   };
 }
@@ -170,11 +174,11 @@ function renderArena(fight) {
   const p1 = fight.player1;
   const p2 = fight.player2;
   let text =
-    `⚔️ <b>FIGHT — ROUND ${fight.round_number}</b>\n\n` +
-    `${raceText(p1)}  ${mentionHtml(p1)}\n${itemsLine(p1)}` +
+    `⚔️ <b>FIGHT — ROUND ${fight.round_number} ${fight.round_number % 2 === 0 ? "🔴" : "🟢"}</b>\n\n` +
+    `${raceText(p1)}  ${mentionHtml(p1)}${moveTick(p1)}\n${itemsLine(p1)}` +
     `❤️ <b>${p1.hp} / ${maxHpOf(p1)}</b>\n<code>${hpBar(p1.hp, maxHpOf(p1))}</code>\n\n` +
     "                 <b>VS</b>\n\n" +
-    `${raceText(p2)}  ${mentionHtml(p2)}\n${itemsLine(p2)}` +
+    `${raceText(p2)}  ${mentionHtml(p2)}${moveTick(p2)}\n${itemsLine(p2)}` +
     `❤️ <b>${p2.hp} / ${maxHpOf(p2)}</b>\n<code>${hpBar(p2.hp, maxHpOf(p2))}</code>\n\n`;
 
   if (fight.last_result?.length) {
@@ -332,7 +336,7 @@ function resolveRound(p1, p2) {
   } else if (p1Move.kind === "attack" && p2Move.kind === "defend") {
     const damage = atk(p1, p1Move.location);
     if (p1Move.location === p2Move.location) {
-      const penalty = def(p2, p1Move.location); // دفاع درست: دمیج دفاع مدافع (با Resolver بیشتر) به حمله‌کننده برمی‌گردد
+      const penalty = def(p2, p1Move.location); // دفاع درست: دمیج دفاع مدافع به حمله‌کننده برمی‌گردد
       p1Damage += penalty;
       lines.push(`🛡 بازیکن ۲ حمله به ${LOCATION_FA[p1Move.location]} را درست دفاع کرد.`);
       lines.push(`↩️ حمله دفع شد؛ بازیکن ۱: -${penalty} HP`);
@@ -344,7 +348,7 @@ function resolveRound(p1, p2) {
   } else if (p1Move.kind === "defend" && p2Move.kind === "attack") {
     const damage = atk(p2, p2Move.location);
     if (p2Move.location === p1Move.location) {
-      const penalty = def(p1, p2Move.location); // دفاع درست: دمیج دفاع مدافع (با Resolver بیشتر) به حمله‌کننده برمی‌گردد
+      const penalty = def(p1, p2Move.location); // دفاع درست: دمیج دفاع مدافع به حمله‌کننده برمی‌گردد
       p2Damage += penalty;
       lines.push(`🛡 بازیکن ۱ حمله به ${LOCATION_FA[p2Move.location]} را درست دفاع کرد.`);
       lines.push(`↩️ حمله دفع شد؛ بازیکن ۲: -${penalty} HP`);
@@ -604,6 +608,25 @@ export class FightRoom extends DurableObject {
     }
   }
 
+  // به‌روزرسانی پیام راند (تیک ثبت حرکت) بدون تغییر دکمه‌ها؛ پیام عکس‌دار با editMessageCaption
+  async refreshArena(query, fight) {
+    const chatId = query.message.chat.id;
+    const messageId = query.message.message_id;
+    const text = renderArena(fight);
+    const markup = moveKeyboard(fight);
+    if (query.message.photo) {
+      await telegramApi(this.env, "editMessageCaption", {
+        chat_id: chatId,
+        message_id: messageId,
+        caption: text,
+        parse_mode: "HTML",
+        reply_markup: markup,
+      });
+    } else {
+      await editText(this.env, chatId, messageId, text, markup);
+    }
+  }
+
   // ارسال پیام راند:
   //  - اگر آلتیمیتی اثر کرده و برای آن نژاد عکس تنظیم شده: پیام قبلی پاک می‌شود و پیام جدید با عکس (کپشن = متن بازی) می‌آید
   //  - اگر پیام فعلی عکس‌دار است: پاک می‌شود و پیام متنی جدید می‌آید
@@ -824,7 +847,10 @@ export class FightRoom extends DurableObject {
       await this.saveFight(fight);
       await answerCallback(this.env, query.id, `⚡ ${SPECIAL_LABELS[player.race]} ثبت شد.`);
 
-      if (!fight.player1.move || !fight.player2.move) return;
+      if (!fight.player1.move || !fight.player2.move) {
+        await this.refreshArena(query, fight); // تیک کنار اسم کسی که حرکت زده
+        return;
+      }
 
       const outcome = resolveRound(fight.player1, fight.player2);
       fight.player1.hp = Math.min(maxHpOf(fight.player1), Math.max(0, fight.player1.hp - outcome.p1Damage + outcome.p1Heal));
@@ -895,7 +921,10 @@ export class FightRoom extends DurableObject {
       await this.saveFight(fight);
       await answerCallback(this.env, query.id, `✅ ثبت شد: ${MOVE_LABELS[`${kind}:${location}`]}`);
 
-      if (!fight.player1.move || !fight.player2.move) return;
+      if (!fight.player1.move || !fight.player2.move) {
+        await this.refreshArena(query, fight); // تیک کنار اسم کسی که حرکت زده
+        return;
+      }
 
       const outcome = resolveRound(fight.player1, fight.player2);
       fight.player1.hp = Math.min(maxHpOf(fight.player1), Math.max(0, fight.player1.hp - outcome.p1Damage + outcome.p1Heal));
