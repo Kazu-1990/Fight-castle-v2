@@ -2,8 +2,9 @@ import { DurableObject } from "cloudflare:workers";
 import { isStaff } from "./staff.js";
 import { ULT_IMAGES } from "./images.js";
 import { DUEL_LABELS, duelWinner, duelResultLines, startDuel, duelKeyboard, renderDuel } from "./duel.js";
-import { callRegistry, registryStub, sendRegisterPrompt, formatLogMessages, formatBoardMessages, REG_RACE_TO_KEY } from "./registry.js";
+import { callRegistry, registryStub, sendRegisterPrompt, formatLogMessages, formatBoardMessages, sendProfileCard, REG_RACE_TO_KEY } from "./registry.js";
 import { handleRegistryRequest } from "./registration.js";
+import { statsFromItems, itemLabels } from "./items.js";
 
 const MAX_HP = 200;
 
@@ -53,7 +54,10 @@ function makePlayer(user, profile = null) {
     first_name: profile ? `${profile.name} ${profile.family}` : user.first_name || "Player",
     username: profile ? null : user.username || null,
     race: profile ? REG_RACE_TO_KEY[profile.race] || null : null,
-    hp: MAX_HP,
+    // آمار مبارزه از روی آیتم‌ها (در لحظه شروع مبارزه ثبت می‌شود)
+    stats: statsFromItems(profile?.items),
+    item_labels: itemLabels(profile?.items),
+    hp: statsFromItems(profile?.items).max_hp,
     move: null,
     special_used: false,
     poison_damage: 0,
@@ -75,9 +79,24 @@ function raceText(player) {
   return `${emoji} ${name}`;
 }
 
-function hpBar(hp) {
-  const clamped = Math.max(0, Math.min(MAX_HP, hp));
-  const filled = Math.round((clamped / MAX_HP) * 10);
+// دمیج حمله، دمیج دفاع درست و حداکثر HP هر بازیکن (با آیتم‌ها؛ پیش‌فرض بدون آیتم)
+function atk(player, location) {
+  return player.stats?.atk?.[location] ?? ATTACK_DAMAGE[location];
+}
+function def(player, location) {
+  return player.stats?.def?.[location] ?? ATTACK_DAMAGE[location];
+}
+function maxHpOf(player) {
+  return player.stats?.max_hp ?? MAX_HP;
+}
+// آیتم‌های بازیکن، زیر اسمش
+function itemsLine(player) {
+  return player.item_labels?.length ? `🎒 <i>${player.item_labels.map(escapeHtml).join(" • ")}</i>\n` : "";
+}
+
+function hpBar(hp, max = MAX_HP) {
+  const clamped = Math.max(0, Math.min(max, hp));
+  const filled = Math.round((clamped / max) * 10);
   return "█".repeat(filled) + "░".repeat(10 - filled);
 }
 
@@ -131,7 +150,7 @@ function renderWaiting(fight) {
   const p = fight.player1;
   return (
     "⚔️ <b>FIGHT ARENA</b>\n\n" +
-    `🥇 ${mentionHtml(p)} — <b>${raceText(p)}</b>\n\n` +
+    `🥇 ${mentionHtml(p)} — <b>${raceText(p)}</b>\n${itemsLine(p)}\n` +
     "✅ بازیکن اول آماده است.\n⏳ منتظر نفر دوم...\n\n" +
     "برای ورود به مبارزه دکمه زیر را بزن."
   );
@@ -152,11 +171,11 @@ function renderArena(fight) {
   const p2 = fight.player2;
   let text =
     `⚔️ <b>FIGHT — ROUND ${fight.round_number}</b>\n\n` +
-    `${raceText(p1)}  ${mentionHtml(p1)}\n` +
-    `❤️ <b>${p1.hp} / ${MAX_HP}</b>\n<code>${hpBar(p1.hp)}</code>\n\n` +
+    `${raceText(p1)}  ${mentionHtml(p1)}\n${itemsLine(p1)}` +
+    `❤️ <b>${p1.hp} / ${maxHpOf(p1)}</b>\n<code>${hpBar(p1.hp, maxHpOf(p1))}</code>\n\n` +
     "                 <b>VS</b>\n\n" +
-    `${raceText(p2)}  ${mentionHtml(p2)}\n` +
-    `❤️ <b>${p2.hp} / ${MAX_HP}</b>\n<code>${hpBar(p2.hp)}</code>\n\n`;
+    `${raceText(p2)}  ${mentionHtml(p2)}\n${itemsLine(p2)}` +
+    `❤️ <b>${p2.hp} / ${maxHpOf(p2)}</b>\n<code>${hpBar(p2.hp, maxHpOf(p2))}</code>\n\n`;
 
   if (fight.last_result?.length) {
     text += "📜 <b>نتیجه راند قبل</b>\n";
@@ -174,8 +193,8 @@ function renderFinished(fight, winner) {
   const p2 = fight.player2;
   let base =
     "☠️ <b>FIGHT OVER</b>\n\n" +
-    `${raceText(p1)} ${mentionHtml(p1)}\n❤️ <b>${p1.hp} HP</b>\n\n` +
-    `${raceText(p2)} ${mentionHtml(p2)}\n❤️ <b>${p2.hp} HP</b>\n\n`;
+    `${raceText(p1)} ${mentionHtml(p1)}\n${itemsLine(p1)}❤️ <b>${p1.hp} HP</b>\n\n` +
+    `${raceText(p2)} ${mentionHtml(p2)}\n${itemsLine(p2)}❤️ <b>${p2.hp} HP</b>\n\n`;
 
   if (fight.last_result?.length) {
     base += "📜 <b>راند آخر</b>\n";
@@ -295,25 +314,25 @@ function resolveRound(p1, p2) {
     const p1Special = p1Move.kind === "special";
     const p2Special = p2Move.kind === "special";
     if (p1Special && p2Move.kind === "attack") {
-      const damage = ATTACK_DAMAGE[p2Move.location];
+      const damage = atk(p2, p2Move.location);
       p1Damage += damage;
       lines.push(`💥 بازیکن ۲ به ${LOCATION_FA[p2Move.location]} حمله کرد؛ بازیکن ۱: -${damage} HP`);
     } else if (p2Special && p1Move.kind === "attack") {
-      const damage = ATTACK_DAMAGE[p1Move.location];
+      const damage = atk(p1, p1Move.location);
       p2Damage += damage;
       lines.push(`💥 بازیکن ۱ به ${LOCATION_FA[p1Move.location]} حمله کرد؛ بازیکن ۲: -${damage} HP`);
     }
   } else if (p1Move.kind === "attack" && p2Move.kind === "attack") {
-    const d1 = ATTACK_DAMAGE[p1Move.location];
-    const d2 = ATTACK_DAMAGE[p2Move.location];
+    const d1 = atk(p1, p1Move.location);
+    const d2 = atk(p2, p2Move.location);
     p2Damage += d1;
     p1Damage += d2;
     lines.push(`⚔️ هر دو حمله کردند: بازیکن ۱ به ${LOCATION_FA[p1Move.location]} و بازیکن ۲ به ${LOCATION_FA[p2Move.location]}.`);
     lines.push(`💥 بازیکن ۱: -${d2} HP | بازیکن ۲: -${d1} HP`);
   } else if (p1Move.kind === "attack" && p2Move.kind === "defend") {
-    const damage = ATTACK_DAMAGE[p1Move.location];
+    const damage = atk(p1, p1Move.location);
     if (p1Move.location === p2Move.location) {
-      const penalty = damage; // دفاع درست: کل دمیج به حمله‌کننده برمی‌گردد
+      const penalty = def(p2, p1Move.location); // دفاع درست: دمیج دفاع مدافع (با Resolver بیشتر) به حمله‌کننده برمی‌گردد
       p1Damage += penalty;
       lines.push(`🛡 بازیکن ۲ حمله به ${LOCATION_FA[p1Move.location]} را درست دفاع کرد.`);
       lines.push(`↩️ حمله دفع شد؛ بازیکن ۱: -${penalty} HP`);
@@ -323,9 +342,9 @@ function resolveRound(p1, p2) {
       lines.push(`❤️‍🔥 بازیکن ۲: -${damage} HP`);
     }
   } else if (p1Move.kind === "defend" && p2Move.kind === "attack") {
-    const damage = ATTACK_DAMAGE[p2Move.location];
+    const damage = atk(p2, p2Move.location);
     if (p2Move.location === p1Move.location) {
-      const penalty = damage; // دفاع درست: کل دمیج به حمله‌کننده برمی‌گردد
+      const penalty = def(p1, p2Move.location); // دفاع درست: دمیج دفاع مدافع (با Resolver بیشتر) به حمله‌کننده برمی‌گردد
       p2Damage += penalty;
       lines.push(`🛡 بازیکن ۱ حمله به ${LOCATION_FA[p2Move.location]} را درست دفاع کرد.`);
       lines.push(`↩️ حمله دفع شد؛ بازیکن ۲: -${penalty} HP`);
@@ -486,7 +505,7 @@ export class FightRoom extends DurableObject {
     if (!cmd || !chat || !user) return;
 
     // دستورهایی که در گروه جواب می‌دهند؛ بقیه (مثل /edit) نادیده گرفته می‌شوند
-    if (!["/start", "/fight", "/cancel", "/log", "/list", "/board", "/reset"].includes(cmd)) return;
+    if (!["/start", "/fight", "/cancel", "/log", "/list", "/board", "/reset", "/profile"].includes(cmd)) return;
 
     const staff = isStaff(user.id);
     // همه (حتی کارمندها) باید ثبت‌نام کرده باشند
@@ -494,6 +513,11 @@ export class FightRoom extends DurableObject {
     const allowWhenOff = staff && ["/log", "/cancel"].includes(cmd);
     const profile = await this.requireRegistered(chat.id, user, allowWhenOff);
     if (!profile) return;
+
+    if (cmd === "/profile") {
+      await sendProfileCard(this.env, TG, chat.id, profile);
+      return;
+    }
 
     if (cmd === "/log" || cmd === "/list") {
       if (!staff) {
@@ -613,7 +637,7 @@ export class FightRoom extends DurableObject {
   }
 
   duelText(fight) {
-    const label = (p) => `${raceText(p)}  ${mentionHtml(p)}`;
+    const label = (p) => `${raceText(p)}  ${mentionHtml(p)}${p.item_labels?.length ? "\n" + itemsLine(p).trimEnd() : ""}`;
     return renderDuel(fight, label(fight.player1), label(fight.player2), escapeHtml);
   }
 
@@ -803,8 +827,8 @@ export class FightRoom extends DurableObject {
       if (!fight.player1.move || !fight.player2.move) return;
 
       const outcome = resolveRound(fight.player1, fight.player2);
-      fight.player1.hp = Math.min(MAX_HP, Math.max(0, fight.player1.hp - outcome.p1Damage + outcome.p1Heal));
-      fight.player2.hp = Math.min(MAX_HP, Math.max(0, fight.player2.hp - outcome.p2Damage + outcome.p2Heal));
+      fight.player1.hp = Math.min(maxHpOf(fight.player1), Math.max(0, fight.player1.hp - outcome.p1Damage + outcome.p1Heal));
+      fight.player2.hp = Math.min(maxHpOf(fight.player2), Math.max(0, fight.player2.hp - outcome.p2Damage + outcome.p2Heal));
       fight.last_result = outcome.lines;
       const imageKey = outcome.specialHits[0] || null;
       const winner = winnerFromHp(fight.player1.hp, fight.player2.hp);
@@ -874,8 +898,8 @@ export class FightRoom extends DurableObject {
       if (!fight.player1.move || !fight.player2.move) return;
 
       const outcome = resolveRound(fight.player1, fight.player2);
-      fight.player1.hp = Math.min(MAX_HP, Math.max(0, fight.player1.hp - outcome.p1Damage + outcome.p1Heal));
-      fight.player2.hp = Math.min(MAX_HP, Math.max(0, fight.player2.hp - outcome.p2Damage + outcome.p2Heal));
+      fight.player1.hp = Math.min(maxHpOf(fight.player1), Math.max(0, fight.player1.hp - outcome.p1Damage + outcome.p1Heal));
+      fight.player2.hp = Math.min(maxHpOf(fight.player2), Math.max(0, fight.player2.hp - outcome.p2Damage + outcome.p2Heal));
       fight.last_result = outcome.lines;
       const imageKey = outcome.specialHits[0] || null;
       const winner = winnerFromHp(fight.player1.hp, fight.player2.hp);
