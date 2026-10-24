@@ -2,6 +2,8 @@
 // همه چیز داخل یک Durable Object مشترک (با نام REGISTRY_NAME) ذخیره می‌شود؛
 // از همان باندینگ FIGHT_ROOMS استفاده می‌کنیم، پس نیازی به تغییر wrangler نیست.
 
+import { normalizeItems, itemLabels } from "./items.js";
+
 export const REGISTRY_NAME = "__registry__";
 export const LOG_TTL_MS = 48 * 60 * 60 * 1000;
 export const FAMILIES = ["Stalker", "Scott", "Evans"];
@@ -126,6 +128,32 @@ export function formatLogMessages(entries) {
   return chunkLines(lines);
 }
 
+// شمارنده‌های Board (با /reset صفر می‌شوند؛ games/wins پروفایل ثابت می‌مانند)
+export function boardOf(u) {
+  return { games: u.board_games ?? u.games ?? 0, wins: u.board_wins ?? u.wins ?? 0 };
+}
+
+// متن پروفایل (کپشن عکس)
+export function formatProfile(p) {
+  const labels = itemLabels(normalizeItems(p.items));
+  return [
+    "👤 <b>پروفایل</b>",
+    `اسم: <b>${esc(p.name)}</b>`,
+    `خاندان: <b>${esc(p.family)}</b>`,
+    `نژاد: <b>${esc(p.race)}</b>`,
+    `🎮 تعداد کل بازی‌ها: <b>${p.games || 0}</b>`,
+    `🏆 تعداد برد‌ها: <b>${p.wins || 0}</b>`,
+    `🎒 اینونتوری: ${labels.length ? esc(labels.join("، ")) : "خالی"}`,
+  ].join("\n");
+}
+
+// ارسال کارت پروفایل: با عکس (اگر دارد) و در غیر این صورت فقط متن
+export async function sendProfileCard(env, tg, chatId, profile) {
+  const caption = formatProfile(profile);
+  if (profile.photo && (await tg.sendPhoto(env, chatId, profile.photo, caption))) return;
+  await tg.sendText(env, chatId, caption);
+}
+
 // جدول Board: فقط افرادی که حداقل یک برد دارند، مرتب‌شده بر اساس درصد برد
 export function formatBoardMessages(rows) {
   if (!rows.length) return ["ℹ️ هنوز هیچ‌کس برد ثبت‌شده‌ای ندارد."];
@@ -196,24 +224,35 @@ export class Registry {
     for (const id of [p1, p2]) {
       const u = await this.getUser(id);
       if (!u) continue;
+      const b = boardOf(u);
       u.games = (u.games || 0) + 1;
-      if (winner && winner === id) u.wins = (u.wins || 0) + 1;
+      u.board_games = b.games + 1;
+      if (winner && winner === id) {
+        u.wins = (u.wins || 0) + 1;
+        u.board_wins = b.wins + 1;
+      } else {
+        u.board_wins = b.wins;
+      }
       await this.putUser(u);
     }
   }
 
   async getBoard() {
-    const users = (await this.allUsers()).filter((u) => (u.wins || 0) >= 1 && (u.games || 0) >= 1);
+    const users = (await this.allUsers()).filter((u) => boardOf(u).wins >= 1 && boardOf(u).games >= 1);
     return users
-      .map((u) => ({ name: u.name, family: u.family, games: u.games, wins: u.wins }))
+      .map((u) => ({ name: u.name, family: u.family, games: boardOf(u).games, wins: boardOf(u).wins }))
       .sort((a, b) => b.wins / b.games - a.wins / a.games || b.wins - a.wins || a.games - b.games);
   }
 
   async resetBoard() {
     for (const u of await this.allUsers()) {
-      if (u.games || u.wins) {
-        u.games = 0;
-        u.wins = 0;
+      const b = boardOf(u);
+      if (b.games || b.wins || u.board_games === undefined) {
+        // فقط Board صفر می‌شود؛ games/wins پروفایل دست نمی‌خورد
+        u.games = u.games || 0;
+        u.wins = u.wins || 0;
+        u.board_games = 0;
+        u.board_wins = 0;
         await this.putUser(u);
       }
     }
