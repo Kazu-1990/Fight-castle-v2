@@ -145,6 +145,7 @@ export function formatProfile(p) {
   return [
     "👤 <b>پروفایل</b>",
     `اسم: <b>${esc(p.name)}</b>`,
+    `لقب: ${p.nickname ? `<b>${esc(p.nickname)}</b>` : "-"}`,
     `خاندان: <b>${esc(p.family)}</b>`,
     `نژاد: <b>${esc(p.race)}</b>`,
     `🎮 تعداد کل بازی‌ها: <b>${p.games || 0}</b>`,
@@ -195,6 +196,17 @@ export class Registry {
   }
   async clearPending(id) {
     await this.s.delete(`pending:${id}`);
+  }
+
+  // کارمندی که منتظر تایپ لقب برای یک کاربر است
+  async getNickPending(staffId) {
+    return (await this.s.get(`nick:${staffId}`)) || null;
+  }
+  async setNickPending(staffId, data) {
+    await this.s.put(`nick:${staffId}`, data);
+  }
+  async clearNickPending(staffId) {
+    await this.s.delete(`nick:${staffId}`);
   }
 
   async getSnapshot(staffId) {
