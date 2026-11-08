@@ -519,7 +519,21 @@ export class FightRoom extends DurableObject {
     if (!profile) return;
 
     if (cmd === "/profile") {
-      await sendProfileCard(this.env, TG, chat.id, profile);
+      // اگر روی کسی ریپلای شده، پروفایل او؛ وگرنه پروفایل خود فرستنده
+      const reply = message.reply_to_message;
+      const replied = reply?.from && !reply.forum_topic_created ? reply.from : null;
+      if (!replied || replied.id === user.id) {
+        await sendProfileCard(this.env, TG, chat.id, profile);
+        return;
+      }
+      const res = await callRegistry(this.env, "getProfile", { user_id: replied.id, username: replied.username || null });
+      if (res === null) {
+        await sendText(this.env, chat.id, "⚠️ مشکلی پیش آمد، چند لحظه دیگر دوباره تلاش کن.");
+      } else if (!res.profile) {
+        await sendText(this.env, chat.id, "⚠️ شخص مورد نظر در ربات ثبت‌نام نکرده است.");
+      } else {
+        await sendProfileCard(this.env, TG, chat.id, res.profile);
+      }
       return;
     }
 
