@@ -96,6 +96,42 @@ async function resolveStaffTarget(reg, env, tg, chatId, staffId, num) {
   return target;
 }
 
+async function openNickname(reg, env, tg, chatId, staffId, num) {
+  const target = await resolveStaffTarget(reg, env, tg, chatId, staffId, num);
+  if (!target) return;
+  await reg.setNickPending(staffId, { uid: target.user_id });
+  await tg.sendText(
+    env, chatId,
+    `✍️ لقب را تایپ کنید.\n\n👤 ${esc(target.name)} ${esc(target.family)}\nلقب فعلی: ${target.nickname ? `<b>${esc(target.nickname)}</b>` : "-"}\n\n` +
+      "برای پاک کردن لقب یک نقطه «.» بفرستید.",
+  );
+}
+
+async function setNickname(reg, env, tg, chatId, staffId, pending, text) {
+  const target = await reg.getUser(pending.uid);
+  if (!target) {
+    await reg.clearNickPending(staffId);
+    await tg.sendText(env, chatId, "ℹ️ این کاربر دیگر در لیست وجود ندارد.");
+    return;
+  }
+  const name = `${esc(target.name)} ${esc(target.family)}`;
+  if (text === ".") {
+    target.nickname = null;
+    await reg.putUser(target);
+    await reg.clearNickPending(staffId);
+    await tg.sendText(env, chatId, `🧹 لقب <b>${name}</b> پاک شد.`);
+    return;
+  }
+  if (text.length > 32) {
+    await tg.sendText(env, chatId, "❌ لقب حداکثر ۳۲ کاراکتر می‌تواند باشد. دوباره بفرستید:");
+    return;
+  }
+  target.nickname = text;
+  await reg.putUser(target);
+  await reg.clearNickPending(staffId);
+  await tg.sendText(env, chatId, `✅ لقب <b>${name}</b> روی «${esc(text)}» ثبت شد.`);
+}
+
 async function openShop(reg, env, tg, chatId, staffId, num) {
   const target = await resolveStaffTarget(reg, env, tg, chatId, staffId, num);
   if (!target) return;
@@ -131,7 +167,7 @@ async function sendList(reg, env, tg, chatId, staffId) {
   users.forEach((u, i) => {
     lines.push(`${i + 1}. ${esc(u.name)}، ${esc(u.family)}، ${esc(u.race)}، ${formatTime(u.registered_at)}`);
   });
-  lines.push("", "حذف: «حذف N»  |  فروشگاه: «شاپ N»  |  اینونتوری: «اینو N»");
+  lines.push("", "حذف N  |  شاپ N  |  اینو N  |  پروفایل N  |  لقب N");
   for (const chunk of chunkLines(lines)) await tg.sendText(env, chatId, chunk);
 }
 
@@ -209,6 +245,8 @@ async function handlePrivateMessage(reg, env, tg, message) {
 
   // کارمندها هم باید ثبت‌نام کرده باشند
   if (staff && profile) {
+    // هر دستور کارمند، منتظر ماندن برای تایپ لقب را لغو می‌کند
+    if (cmd || /^(حذف|شاپ|اینو|پروفایل|لقب)\s+[0-9۰-۹]+$/.test(text)) await reg.clearNickPending(user.id);
     if (cmd === "/on") return toggleBot(reg, env, tg, chatId, user.id, true);
     if (cmd === "/off") return toggleBot(reg, env, tg, chatId, user.id, false);
     if (cmd === "/board" || cmd === "/reset") {
@@ -223,6 +261,19 @@ async function handlePrivateMessage(reg, env, tg, message) {
     if (shop) return openShop(reg, env, tg, chatId, user.id, Number(toEnglishDigits(shop[1])));
     const inv = text.match(/^اینو\s+([0-9۰-۹]+)$/);
     if (inv) return openInventory(reg, env, tg, chatId, user.id, Number(toEnglishDigits(inv[1])));
+    const prof = text.match(/^پروفایل\s+([0-9۰-۹]+)$/);
+    if (prof) {
+      const target = await resolveStaffTarget(reg, env, tg, chatId, user.id, Number(toEnglishDigits(prof[1])));
+      if (target) await sendProfileCard(env, tg, chatId, target);
+      return;
+    }
+    const nick = text.match(/^لقب\s+([0-9۰-۹]+)$/);
+    if (nick) return openNickname(reg, env, tg, chatId, user.id, Number(toEnglishDigits(nick[1])));
+    // متن بعد از «لقب N» = لقب جدید
+    if (!cmd) {
+      const waiting = await reg.getNickPending(user.id);
+      if (waiting) return setNickname(reg, env, tg, chatId, user.id, waiting, text);
+    }
   }
 
   // وقتی ربات خاموش است هیچ ثبت‌نام یا ویرایشی انجام نمی‌شود
