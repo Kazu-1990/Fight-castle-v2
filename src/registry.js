@@ -114,6 +114,10 @@ function logLine(entry) {
   if (entry.type === "delete") return `🗑 ${time} — ${who(entry, "uid")} ${who(entry, "target")} را حذف کرد.`;
   if (entry.type === "cancel") return `🛑 ${time} — ${who(entry, "uid")} مبارزه را کنسل کرد.`;
   if (entry.type === "reset") return `🔄 ${time} — ${who(entry, "uid")} و ${who(entry, "target")} ریست جدول Board را نهایی کردند.`;
+  if (entry.type === "onhere" || entry.type === "offhere") {
+    const group = entry.chat_title ? `«${entry.chat_title}»` : `${entry.chat}`;
+    return `${entry.type === "onhere" ? "🟢" : "🔴"} ${time} — ${who(entry, "uid")} ربات را در گروه ${group} ${entry.type === "onhere" ? "روشن" : "خاموش"} کرد.`;
+  }
   if (entry.type === "off") return `🔴 ${time} — ${who(entry, "uid")} ربات را خاموش کرد.`;
   if (entry.type === "on") return `🟢 ${time} — ${who(entry, "uid")} ربات را روشن کرد.`;
   if (entry.type === "fight") {
@@ -278,6 +282,28 @@ export class Registry {
 
   async isEnabled() {
     return (await this.s.get("bot:enabled")) !== false;
+  }
+
+  // وضعیت یک گروه: اگر برایش /onhere یا /offhere زده شده همان، وگرنه وضعیت کلی ربات
+  async isEnabledFor(chatId) {
+    const global = await this.isEnabled();
+    if (chatId === undefined || chatId === null) return global;
+    const override = await this.s.get(`group:${chatId}`);
+    return override === undefined ? global : override;
+  }
+
+  // فقط وقتی ذخیره می‌شود که وضعیت گروه با وضعیت کلی فرق داشته باشد
+  async setGroup(chatId, wantOn) {
+    if ((await this.isEnabledFor(chatId)) === wantOn) return { changed: false };
+    if (wantOn === (await this.isEnabled())) await this.s.delete(`group:${chatId}`);
+    else await this.s.put(`group:${chatId}`, wantOn);
+    return { changed: true };
+  }
+
+  async clearGroupOverrides() {
+    const map = await this.s.list({ prefix: "group:" });
+    if (map.size) await this.deleteKeys([...map.keys()]);
+    return map.size;
   }
   async setEnabled(value) {
     await this.s.put("bot:enabled", Boolean(value));
