@@ -464,7 +464,7 @@ export class FightRoom extends DurableObject {
 
   // اگر کاربر ثبت‌نام نکرده باشد پیام ثبت‌نام می‌فرستد و false برمی‌گرداند
   async requireRegistered(chatId, user, allowWhenOff = false) {
-    const res = await callRegistry(this.env, "getProfile", { user_id: user.id, username: user.username || null });
+    const res = await callRegistry(this.env, "getProfile", { user_id: user.id, username: user.username || null, chat_id: chatId });
     if (res === null) {
       await sendText(this.env, chatId, "⚠️ مشکلی پیش آمد، چند لحظه دیگر دوباره تلاش کن.");
       return null;
@@ -509,14 +509,32 @@ export class FightRoom extends DurableObject {
     if (!cmd || !chat || !user) return;
 
     // دستورهایی که در گروه جواب می‌دهند؛ بقیه (مثل /edit) نادیده گرفته می‌شوند
-    if (!["/start", "/fight", "/cancel", "/log", "/list", "/board", "/reset", "/profile"].includes(cmd)) return;
+    if (!["/start", "/fight", "/cancel", "/log", "/list", "/board", "/reset", "/profile", "/onhere", "/offhere"].includes(cmd)) return;
 
     const staff = isStaff(user.id);
     // همه (حتی کارمندها) باید ثبت‌نام کرده باشند
     // وقتی ربات خاموش است فقط /log و /cancel کارمندها کار می‌کند
-    const allowWhenOff = staff && ["/log", "/cancel"].includes(cmd);
+    const allowWhenOff = staff && ["/log", "/cancel", "/onhere", "/offhere"].includes(cmd);
     const profile = await this.requireRegistered(chat.id, user, allowWhenOff);
     if (!profile) return;
+
+    // روشن/خاموش کردن ربات فقط برای همین گروه
+    if (cmd === "/onhere" || cmd === "/offhere") {
+      if (!staff) {
+        await sendText(this.env, chat.id, "⛔ این دستور فقط برای کارمندان است.");
+        return;
+      }
+      const wantOn = cmd === "/onhere";
+      const res = await callRegistry(this.env, "setGroup", { chat_id: chat.id, want: wantOn, by: user.id, chat_title: chat.title || null });
+      if (res === null) {
+        await sendText(this.env, chat.id, "⚠️ مشکلی پیش آمد، چند لحظه دیگر دوباره تلاش کن.");
+      } else if (!res.changed) {
+        await sendText(this.env, chat.id, wantOn ? "ℹ️ ربات در این گروه از قبل روشن است." : "ℹ️ ربات در این گروه از قبل خاموش است.");
+      } else {
+        await sendText(this.env, chat.id, wantOn ? "🟢 ربات در این گروه روشن شد." : "🔴 ربات در این گروه خاموش شد.");
+      }
+      return;
+    }
 
     if (cmd === "/profile") {
       // اگر روی کسی ریپلای شده، پروفایل او؛ وگرنه پروفایل خود فرستنده
@@ -767,7 +785,7 @@ export class FightRoom extends DurableObject {
     }
 
     // ربات خاموش: هیچ دکمه‌ای (ورود، حرکت، ...) کار نمی‌کند
-    const state = await callRegistry(this.env, "getState");
+    const state = await callRegistry(this.env, "getState", { chat_id: query.message.chat.id });
     if (state?.enabled === false) {
       await answerCallback(this.env, query.id, "⛔ کارمند، ربات را خاموش کرده است.", true);
       return;
@@ -823,7 +841,7 @@ export class FightRoom extends DurableObject {
     if (action === "join") {
       let joinProfile = null;
       if (fight.phase === "waiting_p2" && user.id !== fight.player1.user_id) {
-        const res = await callRegistry(this.env, "getProfile", { user_id: user.id, username: user.username || null });
+        const res = await callRegistry(this.env, "getProfile", { user_id: user.id, username: user.username || null, chat_id: chatId });
         joinProfile = res?.profile || null;
         if (!joinProfile) {
           await answerCallback(this.env, query.id, "📝 برای ورود به مبارزه باید اول ثبت‌نام کنی.", true);
