@@ -173,13 +173,20 @@ async function sendList(reg, env, tg, chatId, staffId) {
 
 async function toggleBot(reg, env, tg, chatId, userId, wantOn) {
   const enabled = await reg.isEnabled();
-  if (enabled === wantOn) {
+  // /on و /off همه گروه‌ها را تابع وضعیت کلی می‌کنند (تنظیمات /onhere و /offhere پاک می‌شود)
+  const cleared = await reg.clearGroupOverrides();
+  if (enabled === wantOn && !cleared) {
     await tg.sendText(env, chatId, wantOn ? "ℹ️ ربات در حال حاضر روشن است." : "ℹ️ ربات در حال حاضر خاموش است.");
     return;
   }
   await reg.setEnabled(wantOn);
   await reg.addLog({ type: wantOn ? "on" : "off", uid: userId });
-  await tg.sendText(env, chatId, wantOn ? "🟢 ربات روشن شد و به حالت عادی برگشت." : "🔴 ربات خاموش شد. ثبت‌نام و مبارزه تا زمان /on غیرفعال است.");
+  await tg.sendText(
+    env, chatId,
+    wantOn
+      ? "🟢 ربات روشن شد و در همه گروه‌ها و پیوی به حالت عادی برگشت."
+      : "🔴 ربات خاموش شد. ثبت‌نام و مبارزه در همه‌جا غیرفعال است.\nبرای روشن کردن فقط در یک گروه، در همان گروه /onhere را بزن.",
+  );
 }
 
 async function sendLogs(reg, env, tg, chatId) {
@@ -463,13 +470,20 @@ export async function handleRegistryRequest(storage, env, request, tg) {
     try { data = await request.json(); } catch { /* empty */ }
 
     if (op === "isRegistered") return Response.json({ registered: Boolean(await reg.getUser(data.user_id)) });
+    if (op === "setGroup") {
+      const { changed } = await reg.setGroup(data.chat_id, Boolean(data.want));
+      if (changed) {
+        await reg.addLog({ type: data.want ? "onhere" : "offhere", uid: data.by, chat: data.chat_id, chat_title: data.chat_title || null });
+      }
+      return Response.json({ changed });
+    }
     if (op === "getProfile") {
       const profile = await reg.getUser(data.user_id);
       if (profile && "username" in data && (profile.username || null) !== (data.username || null)) {
         profile.username = data.username || null;
         await reg.putUser(profile);
       }
-      return Response.json({ profile, enabled: await reg.isEnabled() });
+      return Response.json({ profile, enabled: await reg.isEnabledFor(data.chat_id) });
     }
     if (op === "getBoard") return Response.json({ rows: await reg.getBoard() });
     if (op === "resetBoard") {
@@ -477,7 +491,7 @@ export async function handleRegistryRequest(storage, env, request, tg) {
       await reg.addLog({ type: "reset", uid: data.by, target: data.confirmer });
       return Response.json({ ok: true });
     }
-    if (op === "getState") return Response.json({ enabled: await reg.isEnabled() });
+    if (op === "getState") return Response.json({ enabled: await reg.isEnabledFor(data.chat_id) });
     if (op === "logFight") {
       await reg.recordFight(data.p1, data.p2, data.winner || 0);
       await reg.addLog({ type: "fight", p1: data.p1, p2: data.p2, winner: data.winner || 0 });
